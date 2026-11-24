@@ -1,0 +1,311 @@
+{
+  "method": "Lossless Flate recompression and PDF object-stream packing. Original retained whenever optimized file is not smaller. Images are not downsampled or re-encoded. Text sidecars are search aids; PDFs retain layout, equations and figures.",
+  "papers": [
+    {
+      "source_name": "AURA_bmvc.pdf",
+      "pdf": "AURA_bmvc.pdf",
+      "text": "text/AURA_bmvc.txt",
+      "pages": 27,
+      "original_bytes": 24089137,
+      "published_bytes": 24089137,
+      "source_sha256": "e8ea4a9d9f2dfda605000e1af3899005e9af3a738ae500cca2fda6e70d65a606",
+      "pdf_sha256": "e8ea4a9d9f2dfda605000e1af3899005e9af3a738ae500cca2fda6e70d65a606",
+      "text_sha256": "791712deb7acb1cc3ce4066661ad1674f9ccf78ac669d64cf5301d4998041ae7",
+      "method": "original_retained_for_exact_stream_preservation",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    },
+    {
+      "source_name": "AVTR-1: Open Stack for Real-Time Interactive Avatars.pdf",
+      "pdf": "AVTR-1: Open Stack for Real-Time Interactive Avatars.pdf",
+      "text": "text/AVTR-1: Open Stack for Real-Time Interactive Avatars.txt",
+      "pages": 28,
+      "original_bytes": 3520160,
+      "published_bytes": 3515051,
+      "source_sha256": "8af9ad95462906261b3d51fc69e74b5da0634a7f9a941486e25d7e0a1dbfa817",
+      "pdf_sha256": "ce9a8012f86ee922d7acb238e4c2f82eec1c2c9671c8d6b58f05718826f34992",
+      "text_sha256": "b1a14f6cd835883a261506d0b8b0054eca5e5312a2f55a21a081af3fec567e37",
+      "method": "lossless_recompressed",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    },
+    {
+      "source_name": "Allo AVA.pdf",
+      "pdf": "Allo AVA.pdf",
+      "text": "text/Allo AVA.txt",
+      "pages": 20,
+      "original_bytes": 9912891,
+      "published_bytes": 9912891,
+      "source_sha256": "f3a4f5fd75cd4c12475e547d958e138b46858f0be6847c57541b4c40f32b0da8",
+      "pdf_sha256": "f3a4f5fd75cd4c12475e547d958e138b46858f0be6847c57541b4c40f32b0da8",
+      "text_sha256": "5372b65fc2d29a0360cc38dcfd5fcfc0d7b0fc6513fe26a98a4c5f6df3e41d7e",
+      "method": "original_already_smaller",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    },
+    {
+      "source_name": "Avatar Forcing.pdf",
+      "pdf": "Avatar Forcing.pdf",
+      "text": "text/Avatar Forcing.txt",
+      "pages": 18,
+      "original_bytes": 13773927,
+      "published_bytes": 12979611,
+      "source_sha256": "083cdc8105e1ffb037277efef176dd9f9e5d7aa7b0485fce7f2fc7acd5508f7b",
+      "pdf_sha256": "a19a5dbce27aa15ac1cd5c6a00e9d763da5adc0e292e37dd55a596199f8dea44",
+      "text_sha256": "aa6b6b8a192f1ca7a8cb2a6058a79f285f9977c7b82d3ff67136b7fda4ba4741",
+      "method": "lossless_recompressed",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    },
+    {
+      "source_name": "Decoupled Self-Forcing Distillation for Streaming Talking Head Generation.pdf",
+      "pdf": "Decoupled Self-Forcing Distillation for Streaming Talking Head Generation.pdf",
+      "text": "text/Decoupled Self-Forcing Distillation for Streaming Talking Head Generation.txt",
+      "pages": 9,
+      "original_bytes": 4903730,
+      "published_bytes": 4859708,
+      "source_sha256": "54538c82adbe06e9c329696faf428880cc20ad1402fefe037d5867970a5b650a",
+      "pdf_sha256": "10def3f87ce8a7e4633aafac213e181bc08e8a936fc7beb42ec1cedcdb3c520f",
+      "text_sha256": "73fd526aaac6c65549561867d43f253057d0f87333573ab3ccb83fc6a8eb17a7",
+      "method": "lossless_recompressed",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    },
+    {
+      "source_name": "DiscoForcing: A Unified Framework for Real-Time Audio-Driven Character Control with Diffusion Forcing.pdf",
+      "pdf": "DiscoForcing: A Unified Framework for Real-Time Audio-Driven Character Control with Diffusion Forcing.pdf",
+      "text": "text/DiscoForcing: A Unified Framework for Real-Time Audio-Driven Character Control with Diffusion Forcing.txt",
+      "pages": 12,
+      "original_bytes": 7873798,
+      "published_bytes": 7873798,
+      "source_sha256": "895b1171ddc07cf5e943a82d465c8c4a9abf1c3d0b2532e86af35ac4ea76a8d7",
+      "pdf_sha256": "895b1171ddc07cf5e943a82d465c8c4a9abf1c3d0b2532e86af35ac4ea76a8d7",
+      "text_sha256": "92b6768caf15501d2f3048932c02db56ed69ad61e3d72cf7e3eb7258f8069363",
+      "method": "original_already_smaller",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    },
+    {
+      "source_name": "EmbodiedHead: Real-Time Listening and Speaking Avatar for Conversational Agents.pdf",
+      "pdf": "EmbodiedHead: Real-Time Listening and Speaking Avatar for Conversational Agents.pdf",
+      "text": "text/EmbodiedHead: Real-Time Listening and Speaking Avatar for Conversational Agents.txt",
+      "pages": 26,
+      "original_bytes": 4275012,
+      "published_bytes": 4171659,
+      "source_sha256": "b625bcc156baef5078239a021a42183db399510b2834c2333541591620dbe7f8",
+      "pdf_sha256": "9c46c264f5b01f65d449480adddc99535bc91576e8e74815260103c75eef9777",
+      "text_sha256": "3e2e4149e04a4b803786239866b3a68159a58266b3dd5bc96a0d60aa3f4b4d03",
+      "method": "lossless_recompressed",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    },
+    {
+      "source_name": "Hallo-Live.pdf",
+      "pdf": "Hallo-Live.pdf",
+      "text": "text/Hallo-Live.txt",
+      "pages": 11,
+      "original_bytes": 18041846,
+      "published_bytes": 17962875,
+      "source_sha256": "8cb89ab01fa546e71f2dc682862f46df3bdf6153a19b9c1463083a079a13536d",
+      "pdf_sha256": "2c6f172e83cd8217defad883607e3a6ac8e1c3d2950f64db4bf0507f54dd60d5",
+      "text_sha256": "465c193b7e47f84afc5c0b9347e5b2d7af3bec9579edeff46087863e93bd4398",
+      "method": "lossless_recompressed",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    },
+    {
+      "source_name": "InteractiveAvatar.pdf",
+      "pdf": "InteractiveAvatar.pdf",
+      "text": "text/InteractiveAvatar.txt",
+      "pages": 18,
+      "original_bytes": 1450277,
+      "published_bytes": 1386522,
+      "source_sha256": "69586dc391edab5d4144885b20808f6fee2770f0e98b3ceac743a5c8c6d802af",
+      "pdf_sha256": "1853e10bbe428b9076cac7838468ff74b52d5db4f9814ac3ed5823fd8bc96e91",
+      "text_sha256": "d1a618a077c0719e158940be06b0154cc5f6c11a62216366b9671161a70f5bd5",
+      "method": "lossless_recompressed",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    },
+    {
+      "source_name": "LeapTalk.pdf",
+      "pdf": "LeapTalk.pdf",
+      "text": "text/LeapTalk.txt",
+      "pages": 12,
+      "original_bytes": 3552708,
+      "published_bytes": 3552708,
+      "source_sha256": "bea501573e9dcd56a0836bd5e7e59b7fe398e2ebe669c8b99fa879407581ac12",
+      "pdf_sha256": "bea501573e9dcd56a0836bd5e7e59b7fe398e2ebe669c8b99fa879407581ac12",
+      "text_sha256": "ad5b3f0e538ba71d67b174726683d9ceaa7362c904c14ef25eb2bcda0efa1d91",
+      "method": "original_already_smaller",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    },
+    {
+      "source_name": "LiveAvatar.pdf",
+      "pdf": "LiveAvatar.pdf",
+      "text": "text/LiveAvatar.txt",
+      "pages": 34,
+      "original_bytes": 38962345,
+      "published_bytes": 38020965,
+      "source_sha256": "f79055a1d41b8ca61cb3c64826b54f98fd9cc43bc4736ab6004eb6b613fcd3dd",
+      "pdf_sha256": "016f7cedf307cbc817abf44d81ed1f0b5dd1595555763577a19c91848d87aa01",
+      "text_sha256": "85e6ed61a87e6f3834bfd7e5edd1dff578c52749c06995aa7c6876e01fd5de2a",
+      "method": "lossless_recompressed",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    },
+    {
+      "source_name": "No Distillation Needed: Single-Pass Real-Time Talking Heads via Acausal Noise Shaping.pdf",
+      "pdf": "No Distillation Needed: Single-Pass Real-Time Talking Heads via Acausal Noise Shaping.pdf",
+      "text": "text/No Distillation Needed: Single-Pass Real-Time Talking Heads via Acausal Noise Shaping.txt",
+      "pages": 16,
+      "original_bytes": 4914280,
+      "published_bytes": 4914280,
+      "source_sha256": "c775aa0bd653dea0f813095c9139c539a4ee3953455b1c32336b175d3172b45e",
+      "pdf_sha256": "c775aa0bd653dea0f813095c9139c539a4ee3953455b1c32336b175d3172b45e",
+      "text_sha256": "5877ae27e171f638a66d99cfe6c7b3f578c27f86604803da9bd8b182c692456e",
+      "method": "original_already_smaller",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    },
+    {
+      "source_name": "Omni-LiveAvatarpdf",
+      "pdf": "Omni-LiveAvatar.pdf",
+      "text": "text/Omni-LiveAvatar.txt",
+      "pages": 11,
+      "original_bytes": 7500799,
+      "published_bytes": 7499790,
+      "source_sha256": "c5e1aa7b7b7fc0ff6b4a0ad4d8f76fae500b3db5a368c5b80aa38283910361c0",
+      "pdf_sha256": "f516a9519452e8da57aaa30470a9133127b8bbdb20d5c63abf87858968720225",
+      "text_sha256": "e4926e0a0b9c57a0f0795029d5fa6bbe42ddcb0281ce7591063e8509627a5973",
+      "method": "lossless_recompressed",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    },
+    {
+      "source_name": "Sun_StreamAvatar_Streaming_Diffusion_Models_for_Real-Time_Interactive_Human_Avatars_CVPR_2026_paper.pdf",
+      "pdf": "Sun_StreamAvatar_Streaming_Diffusion_Models_for_Real-Time_Interactive_Human_Avatars_CVPR_2026_paper.pdf",
+      "text": "text/Sun_StreamAvatar_Streaming_Diffusion_Models_for_Real-Time_Interactive_Human_Avatars_CVPR_2026_paper.txt",
+      "pages": 11,
+      "original_bytes": 7600581,
+      "published_bytes": 7453214,
+      "source_sha256": "43bceac77f38259e10954e16af8c84618d5b8a6d4229ba41f98545dda3261584",
+      "pdf_sha256": "4d205f4f5f85a2d31e41503461f0e2a8a32fb352727c160adc02a5136410847e",
+      "text_sha256": "6b03f98b34d4a162806488e07a7639c491973f3c4113e0516a20f963e19df8ba",
+      "method": "lossless_recompressed",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    },
+    {
+      "source_name": "Teller: Real-Time Streaming Audio-Driven Portrait Animation with Autoregressive Motion Generation.pdf",
+      "pdf": "Teller: Real-Time Streaming Audio-Driven Portrait Animation with Autoregressive Motion Generation.pdf",
+      "text": "text/Teller: Real-Time Streaming Audio-Driven Portrait Animation with Autoregressive Motion Generation.txt",
+      "pages": 11,
+      "original_bytes": 7964358,
+      "published_bytes": 7762566,
+      "source_sha256": "e33dd629db677dd0af27cd08197f3ec3a3fd72e5cc2ac8d38089b754b928f1b6",
+      "pdf_sha256": "66a11607cbaa01ccc806289b2416f0aaf7c5ba2f7ed3c34708d1117bb3a55049",
+      "text_sha256": "aaedb0b01d204b07ba20ae428c8a68c18cf4710a61a1fb1e7d691c36b19dae16",
+      "method": "lossless_recompressed",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    },
+    {
+      "source_name": "Vorch-Streamer.pdf",
+      "pdf": "Vorch-Streamer.pdf",
+      "text": "text/Vorch-Streamer.txt",
+      "pages": 17,
+      "original_bytes": 5276157,
+      "published_bytes": 5119341,
+      "source_sha256": "657e11a00c067959d13bf585188c45a237f78971e1bdb64d8b6a648f05ebb543",
+      "pdf_sha256": "3ece5d9e17eeef08f6cbdab71d6b97c8fe01141f039196072e51f973717b2540",
+      "text_sha256": "998da2a80a1515fb9efabc35a9f1bb6e240c0bc69357117f92e963b3b31feb01",
+      "method": "lossless_recompressed",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    },
+    {
+      "source_name": "Where and When to Force: Routed Forcing for Streaming Avatars.pdf",
+      "pdf": "Where and When to Force: Routed Forcing for Streaming Avatars.pdf",
+      "text": "text/Where and When to Force: Routed Forcing for Streaming Avatars.txt",
+      "pages": 19,
+      "original_bytes": 4523828,
+      "published_bytes": 4523828,
+      "source_sha256": "fd9dcd6f30caab1a1b992dfa71b9457bf40785594212047681e254e3e1375578",
+      "pdf_sha256": "fd9dcd6f30caab1a1b992dfa71b9457bf40785594212047681e254e3e1375578",
+      "text_sha256": "5310d125fffee67538e7a17c82e1a2342b5d2df18eaf44e7c7827098fcb428b9",
+      "method": "original_already_smaller",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    },
+    {
+      "source_name": "wang26iv.pdf",
+      "pdf": "wang26iv.pdf",
+      "text": "text/wang26iv.txt",
+      "pages": 28,
+      "original_bytes": 3816184,
+      "published_bytes": 3816184,
+      "source_sha256": "84aa0ac7beffc0f8922efd1183bb03f8586b9803482fc3ba1b93d9d6d7547ff6",
+      "pdf_sha256": "84aa0ac7beffc0f8922efd1183bb03f8586b9803482fc3ba1b93d9d6d7547ff6",
+      "text_sha256": "c6d7d301beab140c3fd062c96a3d65098988a5cc31f0f64496553c49156e1cf4",
+      "method": "original_retained_for_exact_stream_preservation",
+      "checks": {
+        "page_count_equal": true,
+        "content_and_image_streams_equal": true,
+        "extracted_text_equal": true
+      }
+    }
+  ]
+}

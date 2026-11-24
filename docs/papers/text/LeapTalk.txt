@@ -1,0 +1,825 @@
+                                           LeapTalk: Breaking the Latency–Quality Trade-off in Talking Head Generation
+                                                                                        Rongxiang Zhang1,2 , Songhua Liu1∗
+                                                                            1
+                                                                                School of Artificial Intelligence, Shanghai Jiao Tong University
+                                                                                                2
+                                                                                                  Harbin Institute of Technology
+                                                                                     zrongxiang1@gmail.com, liusonghua@sjtu.edu.cn
+
+
+
+
+                                                                        Abstract                                  generating only short clips (5–10s). Although methods like
+                                                                                                                  StableAvatar (Tu et al. 2025) enable long-form synthesis, they
+                                           Long-form and real-time talking-head generation remains chal-          operate in an offline manner and cannot support real-time
+                                           lenging due to a latency-quality trade-off: inefficient multi-step
+                                                                                                                  interaction. (b) Error accumulation. To improve efficiency,
+                                           diffusion prohibits streaming generation, whereas real-time
+                                           autoregressive approaches suffer from error accumulation and           autoregressive methods (Shen et al. 2025; Yu et al. 2026;
+                                           identity drift. To address this drawback, we propose LeapTalk,         Huang et al. 2025a; Mazumdar and Rakesh 2026) convert
+                                           a novel framework that achieves stable and real-time talking-          multi-step diffusion into few-step models via distillation
+arXiv:2608.00079v1 [cs.CV] 29 Jul 2026
+
+
+
+
+                                           head generation with a single forward step, scaling to arbitrarily     techniques and adopt streaming generation. However, their
+                                           long videos. At the heart of our approach lies a single-step           reliance on previously generated frames introduces exposure
+                                           bridge distillation scheme. On the one hand, departing from            bias, causing errors to accumulate over time and leading
+                                           the conventional noise-to-data paradigm, we introduce a data-          to identity corruption and degraded visual quality in long
+                                           to-data transport formulation based on a Brownian bridge.              sequences (Zhu et al. 2026; Yu et al. 2026; Chern et al.
+                                           Anchored by a persistent reference, this strategy effectively          2025). (c) Loss of facial details. While distribution matching
+                                           mitigates identity drift and enhances long-term temporal sta-
+                                                                                                                  distillation (DMD) (Yin et al. 2024) improves efficiency and
+                                           bility. On the other hand, to enable smooth knowledge transfer
+                                           from a pre-trained diffusion teacher to the student bridge model,      partially mitigates exposure bias (Zhu et al. 2026; Chern
+                                           we explore a heterogeneous distillation framework with an              et al. 2025), it reduces sampling steps and sacrifices high-
+                                           SNR-aligned time transformation Φ(τ ), which bridges the               frequency details. This results in degraded facial dynamics,
+                                           functional discrepancy between the two models. Moreover, we            particularly inaccurate or ambiguous lip synchronization
+                                           propose an audio-driven classifier-free guidance mechanism             under few-step settings. In summary, diffusion processes
+                                           to maintain fine-grained lip synchronization under extreme             achieve high visual fidelity but suffer from prohibitive latency,
+                                           step reduction. Extensive experiments demonstrate that our             while autoregressive streaming approaches often compromise
+                                           method achieves high-fidelity and temporally consistent video          long-term stability and fine-grained details.
+                                           generation with only 1 step at up to 200 FPS, significantly out-
+                                           performing existing approaches in both efficiency and stability.          To address this trade-off, we propose LeapTalk, a bridge-
+                                           Project Page: https://zhangrongxiang.github.io/leaptalk-page/          based autoregressive framework for real-time talking-head
+                                                                                                                  generation. LeapTalk is, to our knowledge, the first approach
+                                                                                                                  that enables stable open-ended and real-time streaming talking
+                                                                  Introduction                                    head generation, where each video chunk is synthesized in
+                                         Audio-driven avatar video generation seeks to produce pho-               1 step while preserving accurate lip synchronization, fine-
+                                         torealistic human-centric videos conditioned on a reference              grained facial details, and strong identity consistency.
+                                         image and an audio signal, where facial expressions and body                Our key insight is to reformulate talking-head generation as
+                                         motions are temporally synchronized with speech (Tu et al.               a data-to-data transport process via a Brownian bridge model,
+                                         2025; Weng et al. 2026). This capability enables a wide range            implemented through a novel Bridge Forcing paradigm. By
+                                         of applications, including digital humans, virtual assistants,           introducing a persistent visual anchor I as the starting point
+                                         and content creation in film and media. However, translating             of generation, the trajectory is grounded to a fixed identity
+                                         these capabilities into practical, real-time systems remains             reference, substantially mitigating long-term drift and error ac-
+                                         challenging.                                                             cumulation. To enable efficient training under heterogeneous
+                                            Despite promising performance, we notice that existing                generative paradigms, we propose a heterogeneous DMD
+                                         methods face a fundamental trade-off between latency and                 scheme that distills a flow-matching (Lipman et al. 2023)
+                                         generation quality. (a) High latency and limited length.                 teacher into a bridge student, where a time transformation
+                                         Diffusion-based approaches (Gao et al. 2025; Zhong et al.                function aligns their signal-to-noise ratios for score matching.
+                                         2025; Guo et al. 2024; Yang et al. 2025; Tu et al. 2025). remain         Finally, to preserve fine-grained facial dynamics under few-
+                                         computationally expensive due to iterative denoising, typically          step generation, we introduce an audio-driven classifier-free
+                                                                                                                  guidance (CFG) augmentation, which enhances lip-sync ac-
+                                            ∗
+                                                Corresponding author.                                             curacy and enhance motion diversity, prevents detail collapse
+         Real-Time                             Stream                   Infinite-Length                                                      Lip Accuracy
+ Our model supports 200 FPS on a single Chunk-wise Streaming      Infinite-length Video Generation                                    Accurate Lip-sync matching the
+ H200 GPU with 1 step per chunk.        Autoregressive Generation with Identity-preserving.                                           audio under few-step even 1-step.
+
+
+
+
+                      Reference           0s        5s           30s            60s                               120s             180s            360s              720s …
+      Audio +
+                       Image
+                                                                                                    300                                                                    8.5
+
+     StableAvatar                                        3542s                                                      FPS                           8.38                     8
+                                                                                                    250             Sync-C                                    8.17
+
+
+
+
+                                                                          FPS (Frames per Second)
+                                                                                                                                    7.6
+       Echomimic                      1980s                                                                                                                                7.5
+
+                                                                                                    200                                                    200 FPS         7
+
+
+
+
+                                                                                                                                                                                 Sync-C Score
+           Hallo3                 1610s
+                                                                                                    150                                                                    6.5
+                                                                                                                     6.33
+  SoulX-FlashHead    1.1s
+                                                                                                                                                                           6
+                             3000×                                                                  100
+   LeapTalk (Pro)     0.5s                                                                                                                                                 5.5
+                                                                                                                                           55 FPS
+                                          15000×                                                    50
+                                                                                                                                                                           5
+   LeapTalk (Lite)    0.2s                                                                                                  14.42 FPS
+                                                                                                             0.15 FPS
+                                                                                                     0                                                                     4.5
+                                  Latency                                                                  FantasyTalking SoulX-FlashHead LeapTalk(Pro)   LeapTalk(Lite)
+
+
+
+Figure 1: Overview of LeapTalk. Given audio and a reference image, our method enables open-ended streaming talking-head
+generation with consistent identity. It achieves 1-step inference per chunk at up to 200 FPS, delivering up to 15000× speedup
+while maintaining strong lip-sync accuracy.
+
+
+and static motion in one-step generation. In summary, our key                                                                Preliminaries
+contributions include:                                                 Probability Path Modeling and Rectified Flow
+ • We propose LeapTalk, a real-time, streaming talking-                Probability-path models (De Bortoli et al. 2021; Lipman et al.
+   head generation framework that achieves stable one-step             2023; Liu, Gong, and Liu 2022) generate data by transport-
+   inference with up to 200 FPS on a single GPU, while                 ing a source distribution p0 to a target distribution p1 over
+   maintaining high visual fidelity and long-term identity             continuous time. A common formulation is the SDE (Song
+   consistency.                                                        et al. 2021)
+ • We reformulate talking-head generation as a data-to-data
+   transport problem via a Brownian bridge mathematical                                                   dXt = v(Xt , t) dt + σ(t) dWt ,                 t ∈ [0, 1],                           (1)
+   formulation, and introduce Bridge Forcing to reduce error           where X0 ∼ p0 , X1 ∼ p1 , v is the velocity field, σ(t) controls
+   accumulation and identity drift in autoregressive genera-           diffusion strength, and Wt is Brownian motion.
+   tion.                                                                  Rectified Flow (Liu, Gong, and Liu 2022) is the deter-
+ • We propose a heterogeneous DMD framework to distill                 ministic limit of Eq. 1 with σ(t) = 0. It typically transports
+   a flow-matching teacher into a Brownian-bridge student              Gaussian noise x0 ∼ N (0, I) to data x1 ∼ p1 along
+   including two key components: (i) an SNR-aligned time                                                                xt = (1 − t)x0 + tx1 .                                                  (2)
+   transformation Φ(τ ) that resolves trajectory mismatch
+   and enables well-defined score matching, and (ii) an audio-         The corresponding target velocity is constant: ut = x1 − x0 .
+   driven CFG augmentation mechanism that preserves
+   motion quality under few-step generation.
+                                                                       Brownian Bridge
+ • Extensive experiments demonstrate that our bridge-based             Instead of starting from pure noise, Brownian bridge connects
+   method achieves competitive or superior performance                 two fixed endpoints (x0 , x1 ) while retaining stochasticity
+   across multiple benchmarks, while significantly improving           along the path. Conditioned on x0 ∼ p0 and x1 ∼ p1 , the
+   efficiency and enabling high-quality, open-ended genera-            intermediate state follows
+   tion in the extreme one-step regime.                                                              Xt |(x0 ,x1 ) ∼ N ((1 − t)x0 + tx1 , t(1 − t)I) .                                          (3)
+Equivalently, samples can be written as                                  I across all frames, ensuring a clean and identity-consistent
+                             p                                           starting point. To maintain temporal continuity, we replace
+  Xt = (1 − t)X0 + tX1 + t(1 − t)ϵ,                  t ∈ [0, 1],   (4)   the first K frames with the last K frames from the previous
+where ϵ ∼ N (0, I). The bridge preserves both endpoints                  chunk, which serve as motion prefix. The resulting chunk
+while injecting uncertainty only in the middle of the trajectory,        input is constructed as
+making it effective for paired data-to-data problems (Tan et al.                              (L−K+1:L)
+                                                                                       Ckin = Ck−1
+                                                                                                                          
+                                                                                                            , I, . . . , I ,      (10)
+2025). Its conditional velocity field is                                                                      | {z }
+                                                                                                                                            L−K
+                                        x1 − X t
+                ut (Xt | x0 , x1 ) =             .                 (5)          (L−K+1:L)
+                                         1−t                             where Ck−1       denotes the last K frames of the previous
+                                                                         chunk. This design preserves motion continuity while an-
+A neural network vθ (Xt , t) can then be trained by velocity
+matching:                                                                choring identity at every chunk. Formally, let X(n−1) denote
+                          "                          #                   the previous chunk and X̃(n) the initialized sequence for the
+                                                   2
+                                         x1 − X t                        current chunk. The constructed input X(n) is given by
+  L(θ) = E(x0 ,x1 ), t, Xt vθ (Xt , t) −               , (6)
+                                          1−t                                                     (n−1)
+                                                                                        X(n) = XT −K:T , I, . . . , I ,
+                                                                                                                      
+                                                                                                                                  (11)
+                                                                                                            | {z }
+where t ∼ U(0, 1) and Xt is sampled from Eq. 4.                                                                                             T −K
+   Prior bridge-based generative models (Wang et al. 2025b;
+Tan et al. 2025) have demonstrated the effectiveness of Brow-            where T is the chunk length. This prefix replacement design
+nian bridge formulations, but they still rely on multi-step              enforces identity preservation while enabling smooth temporal
+sampling and offline inference. In contrast, LeapTalk achieves           stitching between consecutive chunks.
+bridge-based stable one-step streaming generation with strong                                                    Flow Matching
+long-term consistency via heterogeneous distillation.                                                            Noise-to-data generation
+
+
+
+                           Methods
+                                                                             Gaussian Noise                         𝑥𝑡 = 1 − 𝑡 𝑥0 + 𝑡𝑥1                     Generate Frames
+Reference-Anchored Bridge Forcing                                                             Quality Degradation                      Error Accumulation
+
+Limitations of Noise-to-Data Autoregressive Diffusion.                                                      Bridge Forcing (Ours)
+Following the formulations of recent works (Huang et al.                                                         Data-to-data generation
+
+2025a; Zhu et al. 2026), standard autoregressive (AR) video
+diffusion models factorize the joint distribution of a sequence
+                                                                              Reference Image                                                               Generate Frames
+X 1:L into a product of conditional distributions:                                                          𝑋𝑡 = 1 − 𝑡 𝑋0 + 𝑡𝑋1 + 𝑡 1 − 𝑡 𝜖
+
+                                                                                                                                       Fewer Inference Steps
+                                                                                              Stable Quality & Identity
+                            K
+                            Y
+              p(X 1:L ) =         p(Ck | C<k , ck ),               (7)   Figure 2: Comparison between conventional noise-to-data
+                            k=1
+                                                                         flow matching and our Bridge Forcing paradigm. The
+                                                                         identity consistency is preserved along bridge process, while
+where each chunk Ck is generated via noise-to-data flow                  error accumulates in the forward diffusion process.
+matching from Gaussian noise conditioned on C<k . Such
+repeated reconstruction from noise leads to error accumu-
+lation, causing identity drift and visual degradation in long            Heterogeneous Distribution Matching Distillation
+sequences.
+Motivation. In talking-head generation, frames share identity            Real-time talking-head generation requires autoregressive
+and differ mainly in motion, which motivates modeling gen-               generation with few-step (ideally 1 step) synthesis. We propose
+eration as a data-to-data transport from the reference image             a heterogeneous DMD (See Figure 3) scheme with SNR-
+I to target frames.                                                      aligned time transformation and audio-driven CFG enables
+   We propose Bridge Forcing, which replaces noise-to-data               high-quality generation.
+reconstruction with a reference-anchored Brownian Bridge.                Time Transformation. Standard Distribution Matching Dis-
+The AR process becomes                                                   tillation minimizes the Kullback–Leibler (KL) divergence,
+                                                                         and the gradient takes the following form:
+                           K
+                           Y                                                                                                             
+             p(X 1:L ) =         p(Ck | C<k , I, ck ),             (8)   ∇θ LDMD-theory = Ezt ,τ,xτ − sreal     (x  ) − s fake
+                                                                                                                               (x )
+                                                                                                                                     ∂Gθ
+                                                                                                                                            .
+                                                                                                            cond τ        cond τ
+                           k=1                                                                                                         ∂θ
+                                                                                                                                       (12)
+where each chunk following the bridge trajectory (Eq. 4) from
+                                                                         where sreal         fake
+                                                                                   cond and scond denote the teacher and student score
+the reference image I to target frame X1 :
+                                                                         functions evaluated at the same noise level. And Gθ is the
+    (n)
+                            p
+ Xt = (1 − t)I + tX1 + t(1 − t) ϵ, ϵ ∼ N (0, I). (9)                     one-step generator.
+                                                                             This formulation assumes that teacher and student share an
+Chunk Construction under Bridge Forcing. For each chunk,                 identical forward process. In our setting, this assumption is
+we initialize the sequence by repeating the reference image              violated: the teacher follows a flow-matching trajectory, while
+    : Frozen                       : Prefix Replacement                                 Audio Condition
+                 : Trainable
+    : Initial Chunk                : Motion Prefix
+                                                                                           Real Score
+         Reference                                                                      (Flow matching)                ΔCFG
+          Image
+                                                                       𝐱Φ 𝜏                    ∅
+       Repeat                                        𝟏                                                                           DMD
+                                  𝒕=𝚽 𝝉 =                    Time                           Real Score
+                                                   𝟏−𝝉     Transform
+                                                𝟏+                                       (Flow matching)
+                                                    𝝉
+
+
+
+                                                                                                                       ΔDM
+                                                                                          Fake Score
+                      One-step                      Eq.4                               (Brownian bridge)
+                      Generator
+    Wav2Vec                                                            𝐱𝜏
+                                      Distribution Matching Gradient                       Bridge Loss
+                Audio
+
+Figure 3: Distillation pipeline of our approach. The one-step student generates frames conditioned on a static reference. To
+enable stable distillation across heterogeneous processes, we apply a time transformation t = Φ(τ ) to align noise levels between
+the flow-matching teacher and the bridge-based student, allowing consistent score supervision and a well-defined DMD objective.
+
+
+the student is defined on a Brownian bridge, resulting in mis-          to degraded lip-sync and static motion. To compensate for
+matched noise levels at the same timestep. Consequently, the            this, we introduce a modification by replacing the teacher
+same timestep corresponds to different signal-to-noise ratios           score with a Classifier-free Guidance score:
+(SNRs), leading to inconsistent noise levels and rendering the                         
+                                                                                                                         ∂Gθ
+                                                                                                                              
+score difference ill-defined.                                               ∇θ L = E − srealcfg (x Φ(τ ) ) − s fake
+                                                                                                                    (x
+                                                                                                               cond τ  )        . (16)
+   To resolve this issue, we construct a time transformation                                                               ∂θ
+function Φ(τ ) to align the two processes through SNR match-              Here, sreal
+                                                                                  cfg is defined as an audio-driven classifier-free
+ing.                                                                                                                          
+                                                                        guidance sreal     real                real    real
+                                                                                   cfg = scond + (α − 1) scond − suncond , where the
+Theorem 1 (SNR-aligned Time Transformation Function).                   unconditional branch is obtained using zero audio input, and
+Let SNRteacher (t) and SNRstudent (τ ) denote the SNR of the            α controls the guidance strength.
+flow-matching teacher and the bridge student, respectively.               Substituting sreal
+                                                                                         cfg into Eq. (16), we obtain the final DMD
+There exists a monotonic time transformation t = Φ(τ ) that             gradient:
+aligns the two processes such that                                                                                             
+                                                                                                                            ∂Gθ
+                SNRteacher (t) = SNRstudent (τ ).          (13)            ∇θ LDMD = E − (∆DM + (α − 1)∆CFG )                     ,
+                                                                                                                             ∂θ
+The corresponding closed-form solution is given by                                                                                  (17)
+                                                                               ∆DM = sreal                 fake
+                                                                                         cond (xΦ(τ ) ) − scond (xτ ),
+                                      1                                        ∆CFG = sreal              real
+                  t = Φ(τ ) =         q         .          (14)                        cond (xΦ(τ ) ) − suncond (xΦ(τ ) ).
+                                          1−τ
+                                 1+        τ                               Meanwhile, the fake score network is trained to match
+                                                                        the the student generator under the residual bridge trajectory.
+   The derivation is provided in Supplementary Material.                Specifically, given a generated sample, we construct interme-
+   This mapping enables consistent score evaluation across              diate states Xτ constructed from Eq. 3 and optimize the fake
+heterogeneous processes. Given an input, the student first              network vθ (Xτ , τ ) with the bridge loss in Eq. 6 where X1
+predicts a one-step output X̂1 = Gθ (·). We then construct              denotes the one-step output of the generator. This objective
+intermediate states xτ along the Brownian bridge Eq. 3. The             ensures that the fake network can serve as the student-side
+corresponding teacher input is obtained via time alignment:             score function for subsequent distillation.
+           xΦ(τ ) ∼ teacher process at t = Φ(τ ),          (15)         Bridge Training. Given a reference I, we construct the
+                                                                        bridge state xτ and predict the velocity to obtain the one-
+ensuring both scores are evaluated under the same SNR.                  step reconstruction: x̂0 = xτ − τ vθ (xτ ). The student is
+Audio-driven Classifier-free Guidance (CFG) Augmenta-                   trained to match a target endpoint x0 generated by the multi-
+tion. While time alignment resolves the inconsistency across            step teacher. To emphasize facial and lip regions, we intro-
+trajectories, few-step distillation—especially in the one-step          duce a spatial weighting matrix: W = 1 + Mface + Mlip ,
+regime—tends to suppress high-frequency dynamics, leading               where Mface and Mlip are binary masks obtained via
+                                                                                    Frame 0   Frame 250 Frame 750 Frame 1500 Frame 2250 Frame 3000 Frame 4500 Frame 6000
+Mediapipe (Googleh 2023). The weighted   i     reconstruction
+                                       2                          OmniAvatar
+loss is: Lrec = E W ⊙ ∥x̂0 − x0 ∥2 . Following prior
+works (Chadebec et al. 2025), we additionally apply a Learned
+Perceptual Image Patch Similarity (LPIPS) (Zhang et al. 2018)       Hallo3
+loss Lperc . The final objective is:
+               L = LDMD + Lrec + λperc Lperc .            (18)    FantasyTalking
+
+
+   To bridge the gap between training and inference, we adopt
+                                                                  Echomimic
+an autoregressive self-rollout strategy in Self-Forcing (Huang
+et al. 2025a) where the model sequentially generates video
+                                                                  SoulX-Flashhead
+chunks conditioned on its previously generated history under         (4 steps)
+the bridge formulation.
+Model Architecture. Both the teacher and student model are        SoulX-Flashhead
+built upon the Wan2.1-T2V-1.3B (Wan et al. 2025) backbone,           (1 step)
+adopting a Diffusion Transformer to model spatio-temporal
+                                                                  LeapTalk-Lite
+dynamics in latent space. To balance visual fidelity and             (1 step)
+efficiency, we employ two autoencoder variants: a 3D Conv-
+based WanVAE for the Pro model, and a lightweight 2D               LeapTalk-Pro
+                                                                     (1 step)
+Conv-based TAEHV (Boer Bohan 2025) for the Lite model,
+which reduces computation and memory with only minor
+quality degradation. For audio conditioning, frame-aligned        Figure 4: Qualitative comparison on long-video streaming
+features are extracted from a pretrained Wav2Vec (Baevski         generation. Frames are sampled from streaming rollouts at
+et al. 2020) audio encoder and injecting them into the DiT        increasing time indices. The red boxes mark identity incon-
+via cross-attention.                                              sistency and drift, and the blue boxes mark slight or incorrect
+                                                                  lip-sync. LeapTalk maintains stable identity and lip motion
+                      Experiments                                 as generation proceeds.
+Implementation Details. In the distillation stage, the learning
+rates are set to 1 × 10−4 for the generator and 2 × 10−6 for
+the fake score network, with an update ratio of 1:5. To           model always keeps a high and stable similarity curve, whereas
+better simulate long-term error accumulation, the generator       baselines such as OmniAvatar degrade noticeably. We also
+produces up to N = 2 history chunks during distillation.          provide motion diversity variance analysis in the supplemen-
+λperc is set to 4. The model is trained on the VividHead          tary material. This sustained stability supports long-duration
+Dataset (Yu et al. 2026), from which we choose the first frame    generation and suggests that our bridge method can be ex-
+as the reference image input. Unless otherwise specified, all     tended to open-ended and infinite generation with both high
+experiments are performed on a single NVIDIA H200 GPU             speed and stability.
+with a batch size of 1 with 10K iterations.                       Qualitative Results. Figure 4 reports qualitative compar-
+Evaluation Metrics. We compare LeapTalk with recent               isons under long-video streaming generation. As the frame
+baselines, including SoulX-FlashHead (Yu et al. 2026), Sta-       index grows, baseline methods accumulate visible artifacts,
+bleAvatar (Tu et al. 2025), EchoMimic (Meng et al. 2025),         drift from the reference identity, and exhibit unstable lip
+Hallo3 (Cui et al. 2025), FantasyTalking (Wang et al. 2025a),     synchronization. In contrast, LeapTalk preserves identity,
+and OmniAvatar (Gan et al. 2025), on 80 videos sampled            facial structure, and lip motion throughout the streaming
+from HDTF (Zhang et al. 2021) and CelebV-HQ (Zhu et al.           process, showing stronger long-duration generation stability.
+2022). For a fair comparison, all baselines are run under the     Furthermore, compared with 4-step SoulX-FlashHead, our
+same hardware and evaluation configuration, using identical       method maintains comparable quality with only 1 step per
+input videos, resolution settings, and inference batch size.      chunk, while SoulX-FlashHead degrades significantly in the
+We use FID (Heusel et al. 2017) and FVD (Unterthiner et al.       1-step setting with noticeable identity drift. This highlights
+2019) for frame quality, Sync-C/Sync-D (Chung and Zisser-         the advantage of our bridge-based formulation for stable and
+man 2016) for audio-visual synchronization, and FPS for           efficient streaming open-ended generation.
+inference speed. Long-term identity consistency is measured
+by tracking DINOv2 (Oquab et al. 2023) similarity between         Ablation Study
+each generated frame and the reference image.                     We ablate the Pro model to quantify the contribution of each
+Quantitative Results. Table 1 shows that LeapTalk achieves        component. For the Brownian Bridge ablation, we keep the
+strong quality while using only 1 NFE. LeapTalk Pro obtains       same model architecture and remove only the bridge formu-
+the best FID/FVD (21/197 on HDTF and 42/370 on CelebV-            lation. As shown in Table 2 and Figure 6, this causes severe
+HQ) and the strongest lip-sync scores, while LeapTalk Lite        degradation, increasing FID from 21 to 217 and reducing
+reaches up to 200 FPS. Figure 5 further evaluates identity        Sync-C from 8.38 to 7.16; visually, the generated identity
+consistency during streaming generation by tracking DINO          drifts over time and the quality collapses into artifacts. This
+similarity to the reference image. As time progresses, our        indicates that the identity-consistency improvement mainly
+                                                                           HDTF                                                           CelebV-HQ
+                  Model                  NFE FID↓ FVD↓ Sync-C↑ Sync-D↓ IQA↑ ASE↑ FPS↑ FID↓ FVD↓ Sync-C↑ Sync-D↓ IQA↑ ASE↑ FPS↑
+                  StableAvatar            50    176         329    8.11      8.05     6.51   2.69 0.42       318          492      4.73           8.61      5.42    3.30 0.42
+                  Echomimic               30    722         981    5.32     10.02     6.16   2.29 0.52       642         1885      1.09           11.02     0.15    3.19 0.52
+                  Hallo3                  51    871         972    7.14      9.23     6.24   2.60 0.30       842         1104      2.49           8.85      5.23    3.22 0.29
+                  FantasyTalking          30    459         884    6.33      9.41     6.13   2.45 0.15       544         1429      1.84           8.61      5.21    3.18 0.15
+                  OmniAvatar              50    168         623    3.10     12.36     6.32   2.68 0.18       351          923      1.25           10.03     5.39    3.27 0.16
+                  Soulx-Flashhead         4     30          452    8.07     8.24      6.60   2.95 14.42      71           642      4.77            8.23     5.57    3.35 14.42
+                  OURS (Lite)             1      38         285    8.14     7.89      6.22   2.70 200        47           456      4.80            8.22     5.51    3.33 200
+                  OURS (Pro)              1      21         197    8.38     7.69      6.53   2.74 55         42           370      5.05            8.21     5.58    3.34 55
+
+                                                              Table 1: Comparison on HDTF and CelebV-HQ datasets.
+
+
+                  1.00
+                                                                                                          LeapTalk
+                               high consistency ( ≥ 0.95)
+                  0.95
+DINO similarity
+
+
+
+
+                  0.90                                                                             w/o Brownian Bridge
+                                                                                                     Error Accumulation
+
+                  0.85
+                                                                                                 w/o Time Transformation
+                   0.7
+                                                                                                        Blurry Quality
+                   0.5
+                   0.3
+                                                                                                   w/o Audio-driven CFG
+                         0           5         10            15     20       25        30          Slight or Incorrect lip-sync
+                                                    Time (min)
+                             FantasyTalking                                SoulX-FlashHead
+                             OmniAvatar                                    EchoMimic
+                             Hallo3                                        LeapTalk Lite
+                                                                                                Figure 6: Ablation results demonstrating the contribution
+                             StableAvatar                                  LeapTalk Pro         of each component in our framework.
+
+Figure 5: DINO similarity over video time. We plot the sim-                                                            …Under...    …Administration...    …Job...      …More...
+
+ilarity between each generated frame and the reference image
+as streaming generation progresses. A flatter and higher curve                                   LeapTalk
+indicates less identity drift over long-duration generation.
+
+                    Method                              FID       Sync-C    Sync-D
+                    LeapTalk                                21     8.38      7.69                w/o Audio-
+                    w/o Brownian Bridge                     217    7.16      11.05               driven CFG
+                    w/o Time Transformation                 378    7.84       8.13
+                    w/o Audio-Driven CFG                    162    4.34      10.21
+
+                                  Table 2: Ablation study results.                              Figure 7: Visualization of ablation effects of audio-driven
+                                                                                                CFG.
+
+comes from the Brownian Bridge. Removing the SNR-aligned
+time transformation also harms fidelity (FID 378) and pro-                                      unnatural facial motion; a moderate value around 1.6 achieves
+duces blur, indicating that teacher-student noise alignment                                     the best balance. Table 3 shows a similar non-monotonic
+is necessary for heterogeneous DMD. Without audio-driven                                        trend for λperc : stronger perceptual supervision improves
+CFG, lip synchronization and motion quality drop substan-                                       PSNR, SSIM, and LPIPS up to λperc =4.0, while λperc =8.0
+tially (Sync-C 4.34, Sync-D 10.21; Figure 7), showing its role                                  degrades all metrics, indicating that excessive perceptual
+in preserving fine-grained mouth dynamics under one-step                                        constraints destabilize visual quality. We therefore use α=1.6
+inference.                                                                                      and λperc =4.0 as default settings. We also provide analyses
+                                                                                                on chunk size and resolution in the supplementary material.
+Parameter Sensitivity Analysis
+We analyze two key hyperparameters that control motion                                                   User Study and Further Discussions
+strength and reconstruction quality: the audio CFG scale α                                      User Study. We conduct a user study with 30 participants,
+and the perceptual loss weight λperc in Eq. 18. As shown                                        primarily consisting of university students and academic
+in Figure 8, increasing α improves lip-sync and motion                                          staff. In each question, participants are presented with videos
+expressiveness at first, but overly large guidance produces                                     generated by another method alongside our LeapTalk results,
+          9.5                                                                 10
+                                                                                                                Identity     Lip-sync    Visual     Overall
+           9                                                                                 Method
+                    Sync-C                                                    9.5                                Cons.         Acc.      Quality     Pref.
+          8.5       Sync-D
+
+           8                                                                  9              StableAvatar        92.40%      93.14%      91.25%     91.37%
+                                                                                             Echomimic           91.26%      96.14%      94.36%     95.11%
+
+
+
+
+                                                                                    Sync-D
+ Sync-C
+
+
+
+
+          7.5
+
+
+           7
+                                                                              8.5
+                                                                                             SoulX-FlashHead     95.23%      92.16%      91.89%     95.32%
+          6.5                                                                 8
+                                                                                             Hallo3              94.81%      95.48%      96.29%     96.21%
+           6
+                                                                                             FantasyTalking      96.89%      93.32%      95.36%     97.90%
+          5.5
+                                                                              7.5
+                                                                                             OmniAvatar          95.95%      94.31%      97.43%     95.75%
+           5                                                                  7
+                    1.2       1.4          1.6
+                                    Audio-driven CFG
+                                                         1.8           2
+                                                                                             Table 4: User study results across different evaluation criteria.
+                                                                                             The table reports the percentage of participants who prefer
+                Figure 8: Sensitivity analysis of audio-driven CFG.                          our method to another method. A higher percentage indicates
+                                                                                             stronger user preference and better perceived performance.
+Metric              λperc =0 λperc =1.0 λperc =2.0 λperc =4.0 λperc =8.0
+PSNR↑                 18.62    19.18             19.30         19.70       17.31                                            Enc. Dec.     Enc.       Dec.
+                                                                                             Autoenc.       Arch.
+SSIM↑                 0.625    0.683             0.692         0.704       0.349                                           Speed Speed    Mem.       Mem.
+LPIPS↓                0.203    0.197             0.194         0.183       0.562
+                                                                                             WanVAE Causal Conv3D 4.17s          5.26s 8.495GB 10.128GB
+                                                                                             TAEHV     Conv2D     0.39s          0.24s 0.008GB 0.411GB
+          Table 3: Perceptual loss weight sensitivity. Bold: best.
+                                                                                             Table 5: Comparison of autoencoder backbones used in
+                                                                                             Lite and Pro variants. Encoding and decoding speeds are
+and are asked to select the best one based on four criteria:                                 measured on video clips of 81 frames under BF16 precision.
+identity consistency, visual quality, lip-sync accuracy, and
+overall preference. As summarized in Table 4, LeapTalk is
+consistently preferred across all criteria, indicating stronger
+perceptual quality in addition to its quantitative performance.
+ Effect of different Autoencoders. As shown in Figure 9 and
+Table 5, TAEHV greatly reduces computation and memory
+compared with the Conv3D-based WanVAE, while preserving
+comparable structure, identity, and motion quality under one-
+step inference. Its main degradation is slight blurriness in fine
+regions such as lips, which can be alleviated by increasing
+inference from 1 to 2 steps, indicating a favorable efficiency–
+quality trade-off for real-time deployment.
+Generalization to Diverse Real-World Scenarios. We fur-
+ther evaluate our method under diverse and challenging inputs,
+including side-view portraits, cartoons, sculptures, and oil
+paintings. As shown in Figure 10, LeapTalk still synthesizes
+temporally coherent talking-head videos while preserving
+the reference identity and visual style. This suggests that
+the bridge-based formulation captures robust identity-motion
+correspondence beyond canonical frontal face images.                                         Figure 10: Generated results under diverse and challenging
+                                                                                             input scenarios.
+
+
+  TAEHV
+   1 step                                                                                                            Conclusion
+
+                                                                                             We present LeapTalk, a novel framework for real-time, stream-
+  TAEHV                                                                                      ing, open-ended talking-head generation. By formulating
+   2 steps
+                                                                                             generation as a Brownian bridge process, it reduces error
+                                                                                             accumulation and stabilizes long-term synthesis. A heteroge-
+                                                                                             neous DMD scheme with SNR-aligned time transformation
+ WanVAE                                                                                      and audio-driven CFG augmentation enables effective distilla-
+  1 step
+                                                                                             tion across mismatched paradigms and high-quality one-step
+                                                                                             generation. LeapTalk achieves competitive fidelity and lip syn-
+                                                                                             chronization at up to 200 FPS, breaking the latency–quality
+                Figure 9: Visual comparison across different VAEs.                           trade-off.
+                       References                                Guo, Y.; Yang, C.; He, H.; Zhao, Y.; Wei, M.; Yang, Z.; Huang,
+Baevski, A.; Zhou, Y.; Mohamed, A.; and Auli, M. 2020.           W.; and Lin, D. 2025. End-to-End Training for Autoregressive
+wav2vec 2.0: A framework for self-supervised learning of         Video Diffusion via Self-Resampling. arXiv:2512.15702.
+speech representations. Advances in neural information           Heusel, M.; Ramsauer, H.; Unterthiner, T.; Nessler, B.; and
+processing systems, 33: 12449–12460.                             Hochreiter, S. 2017. Gans trained by a two time-scale update
+Boer Bohan, O. 2025. TAEHV: Tiny AutoEncoder for Hun-            rule converge to a local nash equilibrium. Advances in neural
+yuan Video. https://github.com/madebyollin/taehv.                information processing systems, 30.
+Brooks, T.; Peebles, B.; Holmes, C.; DePue, W.; Guo, Y.;         Huang, X.; Li, Z.; He, G.; Zhou, M.; and Shechtman, E. 2025a.
+Jing, L.; Schnurr, D.; Taylor, J.; Luhman, T.; Luhman, E.;       Self Forcing: Bridging the Train-Test Gap in Autoregressive
+Ng, C.; Wang, R.; and Ramesh, A. 2024. Video generation          Video Diffusion. arXiv preprint arXiv:2506.08009.
+models as world simulators. In openai.                           Huang, Y.; Guo, H.; Wu, F.; Zhang, S.; Huang, S.; Gan, Q.;
+Chadebec, C.; Tasar, O.; Sreetharan, S.; and Aubin, B. 2025.     Liu, L.; Zhao, S.; Chen, E.; Liu, J.; and Hoi, S. 2025b. Live
+LBM: Latent Bridge Matching for Fast Image-to-Image Trans-       Avatar: Streaming Real-time Audio-Driven Avatar Generation
+lation. arXiv preprint arXiv:2503.07535.                         with Infinite Length. arXiv:2512.04677.
+Chen, B.; Monso, D. M.; Du, Y.; Simchowitz, M.; Tedrake,         Kim, J.; Kang, J.; Choi, J.; and Han, B. 2024. FIFO-Diffusion:
+R.; and Sitzmann, V. 2024. Diffusion Forcing: Next-token Pre-    Generating Infinite Videos from Text without Training. In
+diction Meets Full-Sequence Diffusion. arXiv:2407.01392.         NeurIPS.
+Chen, Z.; Cao, J.; Chen, Z.; Li, Y.; and Ma, C. 2025.            Li, W.; Pan, W.; Luan, P.-C.; Gao, Y.; and Alahi, A. 2025.
+EchoMimic: Lifelike audio-driven portrait animations through     Stable Video Infinity: Infinite-Length Video Generation with
+editable landmark conditions. In Proceedings of the AAAI         Error Recycling. arXiv:2510.09212.
+Conference on Artificial Intelligence, volume 39, 2403–2410.     Lipman, Y.; Chen, R. T. Q.; Ben-Hamu, H.; Nickel, M.;
+Chern, E.; Hu, Z.; Tang, B.; Su, J.; Chern, S.; Deng, Z.; and    and Le, M. 2023. Flow Matching for Generative Modeling.
+Liu, P. 2025. LiveTalk: Real-Time Multimodal Interactive         arXiv:2210.02747.
+Video Diffusion via Improved On-Policy Distillation. arXiv       Liu, X.; Gong, C.; and Liu, Q. 2022. Flow Straight and Fast:
+preprint arXiv:2512.23576.                                       Learning to Generate and Transfer Data with Rectified Flow.
+Chung, J. S.; and Zisserman, A. 2016. Out of time: automated     arXiv:2209.03003.
+lip sync in the wild. In Asian conference on computer vision,    Mazumdar, S.; and Rakesh, V. K. 2026. TempoSyncDiff:
+251–263. Springer.                                               Distilled Temporally-Consistent Diffusion for Low-Latency
+Cui, J.; Li, H.; Zhan, Y.; Shang, H.; Cheng, K.; Ma, Y.; Mu,     Audio-Driven Talking Head Generation. arXiv:2603.06057.
+S.; Zhou, H.; Wang, J.; and Zhu, S. 2025. Hallo3: Highly         Meng, R.; Wang, Y.; Wu, W.; Zheng, R.; Li, Y.; and Ma, C.
+dynamic and realistic portrait image animation with video        2025. Echomimicv3: 1.3 b parameters are all you need for
+diffusion transformer. In Proceedings of the Computer Vision     unified multi-modal and multi-task human animation. arXiv
+and Pattern Recognition Conference, 21086–21095.                 preprint arXiv:2507.03905.
+De Bortoli, V.; Thornton, J.; Heng, J.; and Doucet, A. 2021.     Oquab, M.; Darcet, T.; Moutakanni, T.; Vo, H. V.; Szafraniec,
+Diffusion Schrödinger Bridge with Applications to Score-         M.; Khalidov, V.; Fernandez, P.; Haziza, D.; Massa, F.; El-
+Based Generative Modeling. In Ranzato, M.; Beygelzimer,          Nouby, A.; Howes, R.; Huang, P.-Y.; Xu, H.; Sharma, V.;
+A.; Dauphin, Y.; Liang, P.; and Vaughan, J. W., eds., Advances   Li, S.-W.; Galuba, W.; Rabbat, M.; Assran, M.; Ballas, N.;
+in Neural Information Processing Systems, volume 34, 17695–      Synnaeve, G.; Misra, I.; Jegou, H.; Mairal, J.; Labatut, P.;
+17709. Curran Associates, Inc.                                   Joulin, A.; and Bojanowski, P. 2023. DINOv2: Learning
+Doosti, B.; Naha, S.; Mirbagheri, M.; and Crandall, D. 2020.     Robust Visual Features without Supervision.
+HOPE-Net: A Graph-based Model for Hand-Object Pose               Qiu, H.; Xia, M.; Zhang, Y.; He, Y.; Wang, X.; Shan, Y.;
+Estimation. In The IEEE Conference on Computer Vision            and Liu, Z. 2023. FreeNoise: Tuning-Free Longer Video
+and Pattern Recognition (CVPR).                                  Diffusion Via Noise Rescheduling. arXiv:2310.15169.
+Gan, Q.; Yang, R.; Zhu, J.; Xue, S.; and Hoi, S. 2025. Omni-     Ruhe, D.; Heek, J.; Salimans, T.; and Hoogeboom, E. 2024.
+Avatar: Efficient Audio-Driven Avatar Video Generation with      Rolling Diffusion Models. arXiv:2402.09470.
+Adaptive Body Animation. arXiv preprint arXiv:2506.18866.        Shen, L.; Qian, Q.; Yu, T.; Zhou, K.; Yu, T.; Zhan, Y.; Wang,
+Gao, X.; Hu, L.; Hu, S.; Huang, M.; Ji, C.; Meng, D.; Qi,        Z.; Tao, M.; Yin, S.; and Liu, S. 2025. SoulX-LiveTalk:
+J.; Qiao, P.; Shen, Z.; Song, Y.; et al. 2025. Wan-s2v:          Real-Time Infinite Streaming of Audio-Driven Avatars via
+Audio-driven cinematic video generation. arXiv preprint          Self-Correcting Bidirectional Distillation. arXiv e-prints,
+arXiv:2508.18621.                                                arXiv–2512.
+Google. 2023. Cross-platform, customizable ML solutions          Shen, S.; Zhao, W.; Meng, Z.; Li, W.; Zhu, Z.; Zhou, J.;
+for live and streaming media. https://github.com/google-ai-      and Lu, J. 2023. DiffTalk: Crafting Diffusion Models for
+edge/mediapipe.                                                  Generalized Audio-Driven Portraits Animation. In CVPR.
+Guo, J.; Zhang, D.; Liu, X.; Zhong, Z.; Zhang, Y.; Wan, P.;      Song, Y.; Sohl-Dickstein, J.; Kingma, D. P.; Kumar, A.;
+and Zhang, D. 2024. Liveportrait: Efficient portrait anima-      Ermon, S.; and Poole, B. 2021. Score-Based Genera-
+tion with stitching and retargeting control. arXiv preprint      tive Modeling through Stochastic Differential Equations.
+arXiv:2407.03168.                                                arXiv:2011.13456.
+Tan, Z.; Wang, Z.; Yang, X.; Liu, S.; and Wang, X.                 Zhang, R.; Isola, P.; Efros, A. A.; Shechtman, E.; and Wang,
+2025. Vision Bridge Transformer at Scale. arXiv preprint           O. 2018. The Unreasonable Effectiveness of Deep Features as
+arXiv:2511.23199.                                                  a Perceptual Metric. In Proceedings of the IEEE Conference
+Tu, S.; Pan, Y.; Huang, Y.; Han, X.; Xing, Z.; Dai, Q.; Luo,       on Computer Vision and Pattern Recognition (CVPR).
+C.; Wu, Z.; and Jiang, Y.-G. 2025. Stableavatar: Infinite-         Zhang, Z.; Li, L.; Ding, Y.; and Fan, C. 2021. Flow-Guided
+length audio-driven avatar video generation. arXiv preprint        One-Shot Talking Face Generation With a High-Resolution
+arXiv:2508.08248.                                                  Audio-Visual Dataset. In Proceedings of the IEEE/CVF
+Unterthiner, T.; Van Steenkiste, S.; Kurach, K.; Marinier, R.;     Conference on Computer Vision and Pattern Recognition,
+Michalski, M.; and Gelly, S. 2019. FVD: A new metric for           3661–3670.
+video generation.                                                  Zheng, Z.; Peng, X.; Yang, T.; Shen, C.; Li, S.; Liu, H.;
+                                                                   Zhou, Y.; Li, T.; and You, Y. 2024. Open-sora: Democ-
+Wan, T.; Wang, A.; Ai, B.; Wen, B.; Mao, C.; Xie, C.-W.;
+                                                                   ratizing efficient video production for all. arXiv preprint
+Chen, D.; Yu, F.; Zhao, H.; Yang, J.; et al. 2025. Wan: Open
+                                                                   arXiv:2412.20404.
+and advanced large-scale video generative models. arXiv
+preprint arXiv:2503.20314.                                         Zhong, Z.; Ji, Y.; Kong, Z.; Liu, Y.; Wang, J.; Feng, J.; Liu,
+                                                                   L.; Wang, X.; Li, Y.; She, Y.; et al. 2025. AnyTalker: Scaling
+Wang, H.; Weng, Y.; Du, J.; Xu, H.; Wu, X.; He, S.; Yin,           Multi-Person Talking Video Generation with Interactivity
+B.; Liu, C.; and Liu, Q. 2026. REST: Diffusion-based Real-         Refinement. arXiv preprint arXiv:2511.23475.
+time End-to-end Streaming Talking Head Generation via ID-
+Context Caching and Asynchronous Streaming Distillation.           Zhu, H.; Wu, W.; Zhu, W.; Jiang, L.; Tang, S.; Zhang, L.; Liu,
+arXiv:2512.11229.                                                  Z.; and Loy, C. C. 2022. CelebV-HQ: A Large-Scale Video
+                                                                   Facial Attributes Dataset. In ECCV.
+Wang, Q.; Liu, M.; Hu, J.; Jiang, F.; and Xu, M. 2025a. Fanta-
+syTalking: Realistic Talking Portrait Generation via Coherent      Zhu, H.; Zhao, M.; He, G.; Su, H.; Li, C.; and Zhu, J. 2026.
+Motion Synthesis. arXiv preprint arXiv:2504.04842.                 Causal Forcing: Autoregressive Diffusion Distillation Done
+                                                                   Right for High-Quality Real-Time Interactive Video Genera-
+Wang, Y.; Chen, Z.; Chen, X.; Zhu, J.; and Chen, J. 2025b.         tion. arXiv:2602.02214.
+FrameBridge: Improving Image-to-Video Generation with
+Bridge Models. In International Conference on Machine
+Learning.                                                                                  Appendix
+Weng, Y.; Wang, H.; Yu, Y.; Du, J.; He, S.; Wu, X.; and                                  Related Works
+Xu, H. 2026. EARTalking: End-to-end GPT-style Autore-              Long Video Generation
+gressive Talking Head Synthesis with Frame-wise Control.
+arXiv:2603.20307.                                                  Most video generation models (Brooks et al. 2024; Zheng et al.
+                                                                   2024; Wan et al. 2025; Gao et al. 2025) are limited to short
+Xiao, S.; Zhang, X.; Meng, D.; Wang, Q.; Zhang, P.; and            clips (5–10 seconds), and extending them to longer durations
+Zhang, B. 2025. Knot Forcing: Taming Autoregressive Video          without drift remains challenging. Early methods (Qiu et al.
+Diffusion Models for Real-time Infinite Interactive Portrait       2023; Kim et al. 2024) rely on training-free noise rescheduling,
+Animation. arXiv:2512.21734.                                       while later works (Chen et al. 2024; Ruhe et al. 2024) simulate
+Yang, S.; Kong, Z.; Gao, F.; Cheng, M.; Liu, X.; Zhang,            inference-time corruption during training. Other approaches
+Y.; Kang, Z.; Luo, W.; Cai, X.; He, R.; et al. 2025. In-           explore architectural and training strategies such as next-frame
+finitetalk: Audio-driven video generation for sparse-frame         prediction, causal attention, and rollout-based learning (Zhang
+video dubbing. arXiv preprint arXiv:2508.14033.                    and Agrawala 2025; Zhang et al. 2025; Huang et al. 2025a;
+Yin, T.; Gharbi, M.; Zhang, R.; Shechtman, E.; Durand,             Zhu et al. 2026; Li et al. 2025; Guo et al. 2025). However, these
+F.; Freeman, W. T.; and Park, T. 2024. One-step diffusion          methods still suffer from drift over long sequences. Moreover,
+with distribution matching distillation. In Proceedings of         they are primarily designed for text-to-video tasks and do not
+the IEEE/CVF conference on computer vision and pattern             transfer well to audio-driven talking-head generation due to a
+recognition, 6613–6623.                                            significant domain gap.
+Yu, T.; Qiao, Q.; Shen, L.; Zhou, K.; Hu, J.; Sheng, D.; Hu, B.;   Audio-driven Talking Head Generation
+Qin, H.; Gao, J.; Zhou, C.; Yin, S.; and Liu, S. 2026. SoulX-
+FlashHead: Oracle-guided Generation of Infinite Real-time          Audio-driven talking head generation has achieved remark-
+Streaming Talking Heads. arXiv:2602.07449.                         able visual fidelity with the advent of Diffusion Transformers
+                                                                   (DiTs). However, DiT-based methods (Chen et al. 2025; Cui
+Zhang, L.; and Agrawala, M. 2025. Packing Input Frame Con-         et al. 2025; Gan et al. 2025; Wang et al. 2025a; Shen et al.
+texts in Next-Frame Prediction Models for Video Generation.        2023) can only generated a short clip and suffer from high
+Arxiv.                                                             latency due to the computational burden of multi-step de-
+Zhang, L.; Cai, S.; Li, M.; Wetzstein, G.; and Agrawala, M.        noising. While methods such as StableAvatar (Tu et al. 2025)
+2025. Frame Context Packing and Drift Prevention in Next-          enable infinite-length synthesis, they still operate entirely
+Frame-Prediction Video Diffusion Models. In The Thirty-            offline and cannot support interactive streaming. To bridge
+ninth Annual Conference on Neural Information Processing           the latency gap, recent autoregressive approaches (Yu et al.
+Systems.                                                           2026; Huang et al. 2025b; Xiao et al. 2025; Wang et al. 2026)
+attempt high-speed streaming but inevitably suffer from error             Derivation of the SNR-aligned Time
+accumulation, identity drift, and detail degradation due to the                     Transformation
+flow-matching paradigm that starts from noise.
+                                                                   In this section, we derive the time transformation t = Φ(τ )
+                                                                   that aligns the signal-to-noise ratios (SNRs) between the
+       An Introduction to Brownian Bridge                          teacher and student processes. This alignment ensures that
+We briefly review the construction of the Brownian                 both models operate under equivalent noise levels, which
+bridge (De Bortoli et al. 2021; Tan et al. 2025) starting          is essential for consistent score matching in heterogeneous
+from standard Brownian motion and derive its closed-form           distillation.
+expression.                                                        Proof. For the student model, we consider the Brownian
+   A standard Brownian motion {B(t), t ≥ 0} is a stochastic        bridge formulation
+process satisfying B(0) = 0, with independent increments,                                                p
+and such that                                                             Xτ = τ Xsrc + (1 − τ )Xtgt + τ (1 − τ ) ϵ,       (32)
+          B(t) − B(s) ∼ N (0, t − s), 0 ≤ s < t.            (19)   with ϵ ∼ N (0, I) and τ ∈ (0, 1). Since the objective is to
+As a consequence, B(t) ∼ N (0, t) and                              recover Xtgt , we take (1 − τ )Xtgt as the signal component
+               Cov(B(s), B(t)) = min(s, t).                 (20)   and treat τ Xsrc as a deterministic bias term. The resulting
+                                                                   SNR is therefore
+For a given initial point x, we define a Brownian motion
+starting from x as B x (t) = x + B(t).                                                              (1 − τ )2    1−τ
+                                                                              SNRStudent (τ ) =                =     .      (33)
+   Let {B(t), t ≥ 0} be a standard Brownian motion, i.e.,                                           τ (1 − τ )    τ
+B(0) = 0, it has independent increments, and B(t)−B(s) ∼
+N (0, t−s) for 0 ≤ s < t. For a given initial point x, we define     For the teacher, we adopt the diffusion parameterization
+a Brownian motion starting from x as B x (t) = x + B(t).                          xt = (1 − t)x0 + tϵ,    t ∈ (0, 1),       (34)
+   We consider the process starting from Xsrc :
+                                                                   which yields
+              Xτ = Xsrc + B(τ ), τ ∈ [0, 1],                (21)
+which satisfies X0 = Xsrc and                                                                        (1 − t)2
+                                                                                     SNRTeacher (t) =         .           (35)
+                     Xτ ∼ N (Xsrc , τ I).                   (22)                                        t2
+   However, this process does not constrain the terminal value       We align the two processes by enforcing SNRTeacher (t) =
+X1 . To enforce X1 = Xtgt , we consider the conditioned            SNRStudent (τ ), which gives
+process                                                                                 (1 − t)2     1−τ
+                       Xτ |τ =1 = Xtgt ,                    (23)                                  =        .              (36)
+                                                                                            t2         τ
+which defines the Brownian bridge.
+   Since Brownian motion is a Gaussian process, the joint          Solving for t ∈ (0, 1) yields a unique monotonic mapping
+distribution of (Xτ , X1 ) is Gaussian. In particular,                                                   1
+                     Xτ = Xsrc + B(τ ),                     (24)                      t = Φ(τ ) =        q         .        (37)
+                                                                                                             1−τ
+                                                                                                    1+        τ
+                     X1 = Xsrc + B(1),                      (25)
+and their covariance satisfies                                        This mapping preserves the endpoints τ → 0 ⇒ t → 0
+                   Cov(B(τ ), B(1)) = τ.                    (26)   and τ → 1 ⇒ t → 1, and satisfies Φ(0.5) = 0.5, aligning
+                                                                   the maximal uncertainty point across the two processes. By
+   By standard Gaussian conditioning, we have                      construction, Φ(τ ) ensures that teacher and student operate
+            E[Xτ | X1 ] = Xsrc + τ (X1 − Xsrc ),            (27)   at equivalent noise levels, which provides a consistent basis
+which yields                                                       for score matching despite their heterogeneous generative
+                                                                   formulations.
+      E[Xτ | X1 = Xtgt ] = (1 − τ )Xsrc + τ Xtgt .          (28)
+   The conditional variance is given by                             Comparison on Motion Diversity and Audio
+                 Var(Xτ | X1 ) = τ (1 − τ )I.               (29)                 CFG Ablation
+   Therefore, the conditioned process admits the representa-       To measure the pose variance and naturalness, we
+tion                                                               add Hopenet-based pose diversity (Doosti et al. 2020)
+                                p
+Xτ = (1 − τ )Xsrc + τ Xtgt + τ (1 − τ ) ϵ, ϵ ∼ N (0, I),           (Yaw/Pitch/Roll Std and Average Std) and Beat Align Score
+                                                            (30)   (BAS) to verify this. As shown in Tables 6–7, LeapTalk
+which is the Brownian bridge connecting Xsrc and Xtgt .            achieves superior or competitive diversity and alignment
+   In our formulation, we adopt an equivalent time-reversed        vs. baselines.
+parameterization                                                   Table 7 directly validates the audio CFG claim: pose diversity
+                                      p                            (Avg Std) increases with CFG scale, proving CFG effectively
+      Xτ = τ Xsrc + (1 − τ )Xtgt + τ (1 − τ ) ϵ,            (31)   enhances motion and avoids static behavior. However,
+so that τ = 1 corresponds to the source state and τ = 0            BAS gradually drops as CFG grows, indicating over-strong
+corresponds to the target state.                                   guidance can hurt audio-motion alignment.
+ Method              Yaw Std↑    Pitch Std↑     Roll Std↑    Avg Std↑   BAS↑      Chunk Size        Tchunk (s)     Tgen (s)        Tgen /Tchunk ↓    FPS ↑
+ EchoMimic            1.734        1.867          0.771       1.457     0.650
+ OmniAvatar           4.332        5.888          1.909       4.043     0.652           9              0.36            0.088           0.24           45.4
+ SoulX-Flashhead      3.594        2.918          1.959       2.824     0.684          17              0.68            0.146           0.22          82.0
+ Ours                 6.177        5.632          2.146       4.652     0.696          33              1.32            0.268           0.20          104.7
+                                                                                       49              1.96            0.432           0.22          101.9
+Table 6: Motion diversity vs. baselines on the HDTF samples.                           65              2.60            0.629           0.24          95.3
+Bold: best; uline: 2nd best.
+                                                                                Table 8: Chunk size ablation at 512 × 512, 1-step inference,
+ CFG Scale    Yaw Std↑        Pitch Std↑      Roll Std↑     Avg Std↑    BAS↑    single A100 GPU. Tgen /Tchunk <1 indicates real-time. Bold
+                                                                                represents chosen default, which achieves the best ratio.
+     1.0           1.553        2.653          0.757         1.655      0.723
+     3.0           4.021        4.493          1.668         3.394      0.658
+     5.0           6.840        5.764          2.396         5.000      0.696     Resolution     256 × 256   384 × 384   512 × 512    768 × 768   1024 × 1024
+     7.0           8.533        7.635          2.801         6.323      0.650       FPS ↑           476         191         104           35           14
+                                                                                 Latency (s) ↓     0.059       0.146       0.270        0.793        1.908
+
+       Table 7: Audio CFG scale ablation on HDTF.
+                                                                                Table 9: Inference speed and average chunk generation latency
+                                                                                under different resolutions on a single A100 GPU (1-step
+       Streaming Chunk Size and Playback                                        inference).
+                  Smoothness:
+Our chunk size is 33 frames. For streaming playback, chunk
+i+1 is generated while chunk i is being played; therefore,
+smooth playback only requires Tgen /Tchunk < 1. As shown
+in Table 8, 33 frames achieves the best Tgen /Tchunk ratio
+(0.20), meaning the next chunk is generated within only
+20% of the current chunk’s playback time, leaving
+sufficient margin for continuous gap-free streaming.
+
+
+           Resolution and Inference Speed:
+All main experiments were conducted at 512 × 512 resolu-
+tion. Moreover, Table 9 provides additional results reporting
+FPS and latency under different resolutions on a single A100
+GPU. Note that the 200 fps in the main manuscript is mea-
+sured on H200. We will align the hardware in the revision.
+
+
+  Additional Results in Challenging Scenarios
+We provide additional qualitative results to evaluate our frame-
+work under challenging and out-of-distribution conditions,
+including non-human faces (e.g., animals), artistic por-
+traits (e.g., paintings and stylized illustrations), side-view
+inputs, low-light scenarios, partial occlusions, and non-
+photorealistic objects such as sculptures. Despite significant
+variations in geometry, texture, and illumination, our Bridge                   Figure 11: More qualitative results on challenging condi-
+Forcing framework consistently produces stable and coherent                     tions including non-human faces (e.g., animals), artistic
+animations, preserving identity cues anchored to I while                        portraits (e.g., paintings and stylized illustrations), side-view
+maintaining smooth motion dynamics. Notably, even under                         photos, low-light conditions, partial occlusions, and even
+severe appearance gaps, the model avoids long-horizon drift,                    non-photorealistic objects such as sculptures.
+demonstrating the effectiveness of the endpoint-constrained
+data-to-data formulation and autoregressive chunk design.
+Additional results are shown in Fig. 11.                                        score estimation model. The generator is trained to minimize
+                                                                                the distribution matching loss, bridge loss, and LPIPS loss,
+                                                                                while the fake score estimation model is updated to improve
+  Training Algorithm of heterogeneous DMD                                       its ability to estimate the score of the generated samples.
+Algorithm 1 shows the training algorithm of heterogeneous
+DMD. The training procedure consists of three main steps: (1)
+generating a student chunk and a teacher target, (2) computing
+the generator losses, and (3) updating the generator and fake
+Algorithm 1: Training Procedure with Heterogeneous DMD
+Require: Pretrained flow-matching teacher Vreal , paired
+    dataset D = {(I, c)}
+Require: Audio CFG scale s, spatial loss weights λface , λlip
+Ensure: Trained single-step generator Gθ
+ 1: // Initialize generator and fake score estimators from
+    pretrained model
+ 2: Gθ ← copyWeights(Vreal ), Vfake ← copyWeights(Vreal )
+ 3: while train do
+ 4:    Sample batch (I, c1:K ) ∼ D // I: reference, c:
+       audio chunks
+ 5:    h1 ← I // Initialize autoregressive history
+ 6:    for chunk k = 1 to K do
+ 7:       // Generate student chunk and teacher target
+ 8:       x̂k ← Gθ (hk , I, ck ) // 1-step generation
+ 9:       x∗k ← multiStepRollout(Vreal , hk , I, ck )               //
+          Teacher target
+10:       // Update Generator
+11:       Sample student bridge time τ ∼ U(0, 1) and ϵ ∼
+          N (0, I)                         p
+12:       xτ ← (1 − τ )I + τ x̂k + τ (1 − τ )ϵ // Bridge
+          trajectory                       p
+13:       t ← Φ(τ ) = 1/(1 + (1 − τ )/τ )                      // SNR-
+          aligned Time Transform
+14:       // Audio-driven Classifier-Free Guidance for
+          Teacher
+15:       vcond ← Vreal (xt , t, ck , I)
+16:       vuncond ← Vreal (xt , t, ∅, I)
+            cfg
+17:       vreal ← vuncond + s · (vcond − vuncond )
+18:       // Compute Generator Losses
+                              cfg
+19:       xreal ← xt − t · vreal        // Flow-matching to data
+20:       xfake ← xτ − τ · Vfake (xτ , τ, ck , I) // Bridge to
+          data
+21:       W ← 1 + λface Mface + λlip Mlip // Spatial weights
+22:       LDMD ← distributionMatchingLoss(xreal , xfake , W )
+23:       LBridge ← ∥W ⊙ (x̂k − x∗k )∥22 // Weighted MSE
+24:       LLPIPS ← LPIPS(x̂k , x∗k )
+25:       LG ← LDMD + λbr LBridge + λlpips LLPIPS
+26:       Gθ ← update(Gθ , LG )
+27:       // Update fake score estimation model (Critic)
+28:       Sample time step τ ′ ∼ U(0, 1)
+29:       x̃ ← stopgrad(x̂k )               p
+30:       xτ ′ ← (1 − τ ′ )I + τ ′ x̃ + τ ′ (1 − τ ′ )ϵ
+31:       vtarget ← (xτ ′ − x̃)/τ ′ // Target bridge velocity
+32:       Lcritic ← ∥Vfake (xτ ′ , τ ′ , ck , I) − vtarget ∥22
+33:       Vfake ← update(Vfake , Lcritic )
+34:       // Autoregressive Update
+35:       hk+1 ← stopgrad(x̂k ) // Detach history chunks
+36:    end for
+37: end while
+

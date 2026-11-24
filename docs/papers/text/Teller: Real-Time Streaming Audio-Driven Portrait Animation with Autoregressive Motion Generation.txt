@@ -1,0 +1,755 @@
+                        This CVPR paper is the Open Access version, provided by the Computer Vision Foundation.
+                                     Except for this watermark, it is identical to the accepted version;
+                               the final published version of the proceedings is available on IEEE Xplore.
+
+
+
+
+          Teller: Real-Time Streaming Audio-Driven Portrait Animation with
+                          Autoregressive Motion Generation
+
+                                Dingcheng Zhen Shunshun Yin Shiyang Qin Hou Yi
+                                    Ziwei Zhang Siyuan Liu Gan Qi Ming Tao
+                                          Shanghai Soulgate Techonolgy Co.tl.
+ {dingchengzhen, yinshunshun, qinshiyang, houyi,zhangziwei, siyuanliu, ganqi, ming}@soulapp.cn
+
+       Stage 1                     Facial Motion Latent Generation                                  Stage 2       Efficient Temporal Module
+                             Sample 1
+                                                                                                                       Before Temporal Module
+
+
+
+
+                 +       = Sample 2
+                                                 6
+
+                                                                                    Diverse                            After Temporal Module Move
+
+
+
+
+     Real-Time Performance
+                              200ms chunks
+
+
+
+
+                                                Audio Encode cost 7ms           Stage1 cost 106ms       Stage2 cost 71ms
+
+
+                                        🚀 For 200ms Audio Chunk Condition Total Inference Time < 200ms 🚀
+
+Figure 1. Teller framework is the first autoregressive framework for real-time, audio-driven portrait animation, achieving up to 25 FPS
+while preserving realistic body part and accessory movements. Demo can be found at https://teller-avatar.github.io/.
+                          Abstract                                          cal consistency of body parts and accessories, such as neck
+                                                                            muscles and earrings, improving the realism of these move-
+In this work, we introduce the first autoregressive frame-                  ments. Teller is designed to be efficient, surpassing the in-
+work for real-time, audio-driven portrait animation, a.k.a,                 ference speed of diffusion-based models (Hallo 20.93s vs.
+talking head. Beyond the challenge of lengthy animation                     Teller 0.92s for one second video generation), and achieves
+times, a critical challenge in realistic talking head gener-                a real-time streaming performance of up to 25 FPS. Ex-
+ation lies in preserving the natural movement of diverse                    tensive experiments demonstrate that our method outper-
+body parts. To this end, we propose Teller, the first stream-               forms recent audio-driven portrait animation models, espe-
+ing audio-driven protrait animation framework with autore-                  cially in small movements, as validated by human evalua-
+gressive motion generation. Specifically, Teller first de-                  tions with a significant margin in quality and realism.
+composes facial and body detail animation into two com-
+ponents: Facial Motion Latent Generation (FMLG) based                       1. Introduction
+on an autoregressive transfromer, and movement authentic-
+ity refinement using a Efficient Temporal Module (ETM).                     Realistic and expressive portrait animation from audio and
+Concretely, FMLG employs a Residual VQ model to map                         static images, commonly known as talking head anima-
+the facial motion latent from the implicit keypoint-based                   tion [12, 16, 21, 35], has garnered significant interest across
+model into discrete motion tokens, which are then tempo-                    applications such as virtual avatars, digital communication,
+rally sliced with audio embeddings. This enables the AR                     and entertainment. However, generating high-quality ani-
+tranformer to learn real-time, stream-based mappings from                   mations that are visually compelling and temporally con-
+audio to motion. Furthermore, Teller incorporate ETM to                     sistent remains a major challenge. This complexity stems
+capture finer motion details. This module ensures the physi-                from the need to intricately coordinate lip movements, fa-
+
+
+
+                                                                        21075
+cial expressions, and head positioning to create lifelike ef-         quality, Teller not only meets but exceeds real-time require-
+fects. Moreover, achieving real-time, realistic talking head          ments, ensuring a smooth and responsive user experience.
+animation is complicated by computational constraints and                 In extensive evaluations across various benchmarks and
+the nuances of human movement, making this an especially              real-world settings, Teller demonstrates significant im-
+demanding task.                                                       provements over current state-of-the-art audio-driven por-
+    While recent advancements, such as diffusion mod-                 trait animation models, as shown in Table. 1, particularly
+els [25, 27, 29, 42], have improved high-quality content              in capturing nuanced facial and body movements. Human
+generation, achieving controllable animation presents on-             evaluations validate Teller’s superior quality and realism,
+going hurdles. Effective animation requires the accurate              especially in rendering the subtle movements essential for
+capture of complex facial expressions, body gestures, and             lifelike animations. Our research represents a notable ad-
+the subtle interplay between them. Existing methods often             vancement in real-time talking head animation, presenting
+suffer from prolonged animation times (See animation time             an innovative framework that bridges the gap between real-
+in Tab 1), limiting their potential for real-time applications,       ism and efficiency in multimodal animation, as depicted in
+and frequently fail to capture the natural, interconnected            Figure. 6, Figure. 7, and Figure. 8.
+motions of various facial and body parts, e.g., earrings and
+necklaces, as shown in Figure. 1 stage 2. This shortfall re-          2. Related Works
+sults in animations with stiff or exaggerated movements that          Non-Diffusion-Based Audio-Driven Portrait Animation
+disrupt the realism of the animation (See Figure 7). Ad-              This line of works typically consist of two key components:
+dressing these challenges necessitates a solution that bal-           an audio-to-motion model and a facial motion represen-
+ances computational efficiency with high animation quality            tation model. These methods often utilize implicit key-
+without overloading processing resources.                             points as an intermediate motion representation, warping
+    To this end, we propose Teller, the first autoregres-             the source portrait based on the driving image. The goal of
+sive framework capable of real-time, streaming-based talk-            implicit methods is to learn disentangled representations in
+ing head animation at up to 25 FPS. As shown in Fig-                  2D [4, 18, 23, 34, 44, 49]or 3D [9, 35]latent spaces, with a
+ure. 2, Teller employs a two-stage framework, combining               focus on aspects such as identity, facial dynamics, and head
+Facial Motion Latent Generation (FMLG) and an Efficient               pose. For example, FOMM [26] employs first-order Taylor
+Temporal Module (ETM) to produce realistic and physi-                 expansion to capture local motion, while FaceVid2Vid [35]
+cally consistent animations across facial and body move-              extends this by introducing a 3D implicit keypoint represen-
+ments. In the first stage, FMLG uses a Residual Vector                tation, enabling free-view portrait animation.
+Quantization (RVQ) model [45] to encode facial motion la-                 To effectively learn facial motion representations in la-
+tents derived from an implicit keypoint-based model into              tent space, these approaches often rely on GAN-based
+discrete motion tokens. These tokens are then temporally              frameworks to disentangle identity-related appearance from
+aligned with audio embeddings, allowing an autoregressive             non-identity-related motion, specifically capturing expres-
+(AR) transformer to map audio signals to facial movements             sions, lip and eye movements, minor accessories, and poses.
+in real-time. By breaking down the motion into temporal               Examples include FaceVid2Vid [35], LivePortrait [12], and
+segments, FMLG enables the AR transformer to dynam-                   others, where identity and motion representations are in-
+ically and efficiently generate high-quality animations re-           dependently learned to generate realistic talking head an-
+sponsive to live audio inputs.                                        imations. For instance, MakeItTalk [50] uses an LSTM-
+    To enhance the realism of body movements, Teller intro-           based audio-to-motion model to predict landmark coor-
+duces ETM in the second stage, which captures subtle de-              dinates from audio input, which are then translated into
+tails that are often overlooked in existing methods [12, 41].         video frames using a warp-based GAN model. Similarly,
+The ETM refines finer movements, such as body parts and               SadTalker [46] employs FaceVid2Vid [35] as an image syn-
+accessories, ensuring physically plausible interactions. For          thesizer, with ExpNet and PoseVAE modules transforming
+instance, it simulates realistic motions in neck muscles and          audio features into inputs compatible with FaceVid2Vid for
+dynamic accessories like earrings, which are vital for main-          audio-to-video generation.
+taining visual continuity in the animated avatar. Our Teller              However, these approaches face challenges due to GAN
+model prioritizes computational efficiency and is specifi-            losses that primarily focus on facial expressions, lip, and
+cally designed to significantly outperform diffusion-based            eye movements, often neglecting accessory, hair, and body
+models in terms of inference speed. For example, gener-               movements. This can result in animations that appear stiff
+ating a one-second video takes Hallo 20.93s, while Teller             or incomplete, lacking natural dynamism. In contrast, our
+completes the task in just 0.92s (see Tab. 1). Despite this           work introduces the first autoregressive framework specif-
+speed, Teller maintains high animation fidelity. By optimiz-          ically designed for real-time, audio-driven portrait anima-
+ing computational demands without compromising output                 tion, achieving up to 25 FPS and delivering a more realistic,
+
+
+
+                                                              21076
+                                                     Sec. 3.4 Efficient Temporal Module
+                                                                                                                                                                                                                   Input2
+                                                                                                                                                                                                               Source Picture
+
+
+
+
+                                                                                                       Temporal Module
+                                                              3D U-Net Module
+
+
+
+
+                                                                                                                         3D U-Net Module
+                                            Temporal Module
+
+
+
+
+                                                                                                                                                                                            Motion Decoder
+Stage 2
+
+
+
+
+                                                                                   …     …
+
+
+
+            movement of body
+            parts and accessories
+
+
+
+                                                                                                                                                                                                              Motion tokens
+
+                                     Sec. 3.3 AR Transformer for Motion Generation                                                                                                                                       …
+
+                                                                                                                                                                                                             Motion Quantizer
+                          [MOV]                                                 [/MOV]                           [MOV]                                                [/MOV]
+Stage 1
+
+
+
+
+                                                                                                                                                                                            …                 Motion Latent
+               Audio                                                                          Audio
+              Encoder                                                                        Encoder
+                                                                                                                                                                                                              Motion Encoder
+
+          Input1                     Motion Tokenizer                                                                                        Motion Tokenizer
+
+                                                                                                                                                                                                                     …
+                   Audio Embedding       Motion Token(LM head0)                                Motion Token(LM head1)
+
+
+
+                   Figure 2. Overall framework of our proposed Teller for real-time streaming audio-driven portrait animation.
+
+coherent portrayal of both facial and accessory movements.                                                                         resentation regression. DreamLLM [8] also explores mul-
+Diffusion-based Audio-driven Portrait Animation Re-                                                                                timodal understanding and creation, while Chameleon [31]
+cent advancements in diffusion-based video generation                                                                              introduces token-based models capable of both understand-
+have demonstrated promising outcomes for audio-driven                                                                              ing and generating images.
+portrait animation. Methods like GAIA [14] and VASA-
+1 [41] have designed diffusion models to transform au-                                                                             3. Method
+dio inputs into motion latents, facilitating audio-to-video                                                                        As shown in Fig. 2, Teller comprises two main modules:
+generation. Further developments, such as EMO[32],                                                                                 the Facial Motion Latent Generation (FMLG) and the Ef-
+Hallo [40], LOOPY [17], enhance end-to-end diffusion                                                                               ficient Temporal Module (ETM). FMLG module integrates
+modeling by incorporating motion modules [3, 13, 16] and                                                                           an autoregressive transformer and a residual vector quanti-
+audio cross-attention mechanisms, improving the coherence                                                                          zation (RVQ) component. It applies an autoregressive trans-
+and synchronization between audio cues and visual mo-                                                                              former to generate discrete facial motion tokens from audio
+tion. Despite these improvements, a significant limitation                                                                         input. Following FMLG, ETM refines the generated motion
+of diffusion-based models remains their multi-step infer-                                                                          to produce realistic body and accessory movements, ensur-
+ence process, required to generate even a single frame or a                                                                        ing physical consistency in animated results.
+few frames of video. This step-by-step prediction approach
+renders real-time performance challenging, as it is compu-                                                                         3.1. Preliminaries
+tationally intensive and time-consuming, making diffusion-                                                                         Prior works, such as LivePortrait [12] have introduced
+based models less suitable for applications demanding in-                                                                          methods for extracting implicit keypoints as facial motion
+stantaneous response.                                                                                                              latents using motion and appearance extractors. These mo-
+AR Transformer-Based Generation Recent works [1, 30,                                                                               tion latents capture essential facial dynamics needed for an-
+36, 38, 43, 48] have focused on developing unified multi-                                                                          imating input images and consist of three main components:
+modal language models for generating visual content, such                                                                          • Expression Deformation (δ): A set deformation of 21
+as images and videos. Some studies [28, 51] use autoregres-                                                                           implicit keypoints, represented as  {\delta } = [{\delta }_1, {\delta }_2, \dots , {\delta }_{21}] ,
+sive modeling with continuous representations interleaved                                                                             where each  {\delta } is a 3D vector ( \mathbb {R}^3  ) that indicates the posi-
+with text tokens for image generation. Others, like SEED-                                                                             tion of the  i -th deformation of facial keypoint.
+X [11], propose a foundational system combining CLIP                                                                               • Head Pose ( R ): Defined by three rotation vectors
+ViT-based image representations with text tokens for multi-                                                                                      , R = [r_1, r_2, r_3] 
+                                                                                                                                                     with each  r_i  being a 3D vector ( \mathbb {R}^3  ) that de-
+modal tasks, including next-token prediction and image rep-                                                                           scribes the head’s orientation in 3D space.
+
+
+
+                                                                                                       21077
+• Expression Deformation ( t ): A single 3D vector (
+      t \in \mathbb {R}^3                                                                                                                                                                                                                                                                                                                                                                [MOV]                                                                                                                                                                            … [/MOV]                                               …
+     ) that captures facial expression deformations.
+These components are concatenated into a unified motion                                                                                                                                                                                                                                                                                                                                                                             LM                               LM                                               LM                                         LM
+                                                                                                                                                                                                                                                                                                                                                                                                                                   head0                            head1                                            head0                                      head1
+latent of size  25 \times 3 :
+                                                                      \setlength {\abovedisplayskip }{3pt} \setlength {\belowdisplayskip }{3pt} m = [{\delta }_1,{\delta }_2, \dots , {\delta }_{21}, r_1, r_2, r_3, t],                                                                                        (1)                                                                                                                                                                  Transformer
+
+where  m \in \mathbb {R}^{25 \times 3}  includes the 21 keypoints, head pose,
+                                                                                                                                                                                                                                                                                                                                                                                         [MOV]                                                 +                     +                                                               +                           +        … [/MOV]                                               …
+and expression deformation.
+
+3.2. Facial Motion Latent Generation (FMLG)
+In FMLG, Teller generates motion latent from facial mo-                                                                                                                                                                                                                                                                                                              Motion Token(LM head0)                                                                         Motion Token(LM head1)                                                                              Audio Embedding
+tion extraction, then encodes it into discrete tokens using
+                                                                                                                                                                                                                                                                                                                                                                    Token Embedding (LM head0)                                                                      Token Embedding (LM head1)                                                                          Position Bias
+a residual vector quantizer (RVQ). To optimize encoding,
+the concatenated motion latent m is processed with RVQ,
+leveraging temporal redundancy across T frames for effi-                                                                                                                                                                                                                                                                                       Figure 3. In our Teller, we follow AR transformer architecture,
+cient compression. The RVQ quantization loss, which en-                                                                                                                                                                                                                                                                                        but each input consists of a pair of tokens and model pred a pair of
+codes the continuous m into discrete tokens, is defined as:                                                                                                                                                                                                                                                                                    tokens for each output position.
+                                                                                                                                                                                                                                                                                                                                               audio condition  c :
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                 \setlength {\abovedisplayskip }{3pt} \setlength {\belowdisplayskip }{3pt} P(t_i \mid c, t_{<i}).                                                                              (5)
+  \setlength {\abovedisplayskip }{3pt} \setlength {\belowdisplayskip }{3pt} \small \mathcal {L}_{vq} = \sum _{t=1}^{T} \left [ \underbrace {||m - \text {FFN}_{dec}(z_t + \text {sg}[\hat {z_t} - z_t])||_2^2}_{\mathcal {L}_{\text {recon}}} + \underbrace {||z_t - \text {sg}[\hat {z_t}]||_2^2}_{\mathcal {L}_{\text {commit}}} \right ]    This autoregressive setup enables sequential generation of
+                                                                                                                                                                                                                                                                                                                                               motion based on past motion tokens and audio embeddings.
+                                                                                                                                                                                                                                                                                                                 (2)                               To enable real-time streaming animation, we process
+where zt = FFNenc (m) represents the encoded latent at                                                                                                                                                                                                                                                                                         both audio and video frames in 200ms chunks, following
+each time step t, zˆt is the quantized latent, and sg de-                                                                                                                                                                                                                                                                                      Whisper’s constraints. Each audio chunk is encoded into
+notes the stop-gradient operation. The two loss compo-                                                                                                                                                                                                                                                                                         a  [10 \times 512]  embedding, while each video chunk uses 32
+nents, Lrecon and Lcommit , are defined as follows:                                                                                                                                                                                                                                                                                            learned RVQ-based motion tokens. For efficient real-time
+• Reconstruction Loss (Lrecon ): Minimizes the difference                                                                                                                                                                                                                                                                                      performance, we enable the autoregressive transformer to
+  between the original motion latent m and the decoded                                                                                                                                                                                                                                                                                         process token pairs at each position, which improves pre-
+  quantized latent.                                                                                                                                                                                                                                                                                                                            diction speed by processing two tokens concurrently. In
+• Commitment Loss (Lcommit ): Encourages zt to approach                                                                                                                                                                                                                                                                                        Teller, each input consists of a token pair with a combined
+  the quantized latent zˆt , ensuring stability in quantization.                                                                                                                                                                                                                                                                               embedding and a learnable position bias inspired by BERT,
+                                                                                                                                                                                                                                                                                                                                               capturing relative token positions. The loss for each head,
+   This approach enables FMLG to learn robust,                                                                                                                                                                                                                                                                                                 representing each token in the pair, is computed as:
+temporally-consistent representations, translating audio-
+driven inputs into lifelike facial animations. Experi-                                                                                                                                                                                                                                                                                                                     \setlength {\abovedisplayskip }{3pt} \setlength {\belowdisplayskip }{3pt} \mathcal {L}_{\text {head0}_{j}} = \text {CE}(\text {label}_{j}[0], \text {T}(\text {input}_{j}[0] | \text {input}_{<j})),                                                                (6)
+mentally, to achieve trade-offs between frame count and
+redundancy, we selected 4 frames (4×25×3 latent) to                                                                                                                                                                                                                                                                                                                        \setlength {\abovedisplayskip }{3pt} \setlength {\belowdisplayskip }{3pt} \mathcal {L}_{\text {head1}_{j}} = \text {CE}(\text {label}_{j}[1], \text {T}(\text {input}_{j}[1] | \text {input}_{<j})),                                                                (7)
+be compressed into 32 tokens (hyper-parameter selection
+                                                                                                                                                                                                                                                                                                                                               where  T  denotes the transformer. The total loss, with a reg-
+trade-off refer to Fig. 11).
+                                                                                                                                                                                                                                                                                                                                               ularization term to balance learning across both heads, is:
+3.3. AR Transformer for Motion Generation
+Using the learned RVQ-based latents, motion is denoted as:                                                                                                                                                                                                                                                                                          \setlength {\abovedisplayskip }{3pt} \setlength {\belowdisplayskip }{3pt} \mathcal {L}_{ar} = \sum _{j=1}^{I/2} \left [ \mathcal {L}_{\text {head0}_{j}} + \mathcal {L}_{\text {head1}_{j}} + \left \|\mathcal {L}_{\text {head0}_{j}} - \mathcal {L}_{\text {head1}_{j}}\right \|_2^2 \right ]. 
+
+                   \setlength {\abovedisplayskip }{3pt} \setlength {\belowdisplayskip }{3pt} M = [m_1, m_2, \dots , m_T], \quad \text {where} \quad m_i \in \mathbb {R}^{25 \times 3}.                                                                                                                          (3)                                                                                                                                                    (8)
+                                                                                                                                                                                                                                                                                                                                               This regularization term,  \left \|\mathcal {L}_{\text {head0}} - \mathcal {L}_{\text {head1}}\right \|_2^2  , ensures bal-
+This sequence of motion latents is converted to discrete to-
+                                                                                                                                                                                                                                                                                                                                               anced training across the two heads, promoting stable and
+kens using the RVQ module:
+                                                                                                                                                                                                                                                                                                                                               accurate real-time animation.
+                                                                                                 \setlength {\abovedisplayskip }{3pt} \setlength {\belowdisplayskip }{3pt} T_m = [t_1, t_2, \dots , t_{T/4}],                                                                                                   (4)                               After testing frame count and redundancy, we use 4
+where Tm represents the quantized motion tokens. Audio                                                                                                                                                                                                                                                                                         frames (4×25×3 latent), compressed into 32 tokens (refer
+input is encoded with the Whisper encoder [5], generating                                                                                                                                                                                                                                                                                      to Fig. 11). Then the 4 frames are interpolated to 5 frames
+the audio condition  c . Motion generation is modeled as a                                                                                                                                                                                                                                                                                     for faster generation. This setup balances inference effi-
+next-token prediction task, where the distribution of each                                                                                                                                                                                                                                                                                     ciency and feature quality, enabling real-time, high-fidelity
+token is predicted based on the previous  t-1  tokens and                                                                                                                                                                                                                                                                                      streaming portrait animation.
+
+
+
+                                                                                                                                                                                                                                                                                                                               21078
+                         Emotion: angry                                                                                                                                                                                                         Emotion: disgust
+ GT
+ Ours
+ ours
+ Hallo
+ SadTalker AniPortrait
+ EchoMimic
+ SadTalker
+
+
+
+
+Figure 4. Qualitative comparison with existing approaches on RAVDESS data-set of ’angry’ and ’disgust’ emotion cases. Videos are
+available in the supplementary materials.
+
+3.4. Efficient Temporal Module for Refinement                                                                                                                                                                                                struction loss, and the final loss of ETM:
+
+In diffusion-based models, temporal layers are added to
+text-to-image (T2I) frameworks to capture frame depen-                                                                                                                                                                                             \mathcal {L}_{\text {ETM}} = \sum _{i=6}^{10} \left \| x_{\text {gt}_i} \odot \text {mask}_i - f(x_i | x_{\text {gt}_{<6}}) \odot \text {mask}_i \right \|_2^2, 
+dencies [16]. Inspired by this, Teller incorporates tempo-                                                                                                                                                                                                                                                        (10)
+ral refinement but achieves it in a single step, unlike dif-                                                                                                                                                                                where element-wise multiplication with \protect \text  {mask}_i focuses re-
+fusion models that require multiple iterations, enhancing                                                                                                                                                                                   construction on specific regions. The mask is defined as:
+real-time efficiency. After encoding video frames with a
+VAE encoder, we apply a 3D U-Net [7] to extract features
+from the image sequence, represented as x ∈ Rb×t×h×w×c ,                                                                                                                                                                                                    \setlength {\abovedisplayskip }{3pt} \setlength {\belowdisplayskip }{3pt} \text {mask}(i, j) = \begin {cases} 1, & \text {if } (i, j) \text { is within BB}(x) \\ 0, & \text {otherwise} \end {cases}    (11)
+where  b  is the batch size,  t  the frame count,  h  and  w 
+the frame dimensions, and  c  the channel count. The fea-                                                                                                                                                                                   where BB(x) stands for the bounding box and outlines
+tures are reshaped to x ∈ R(b×h×w)×t×c , enabling ETM                                                                                                                                                                                       relevant body parts. Key landmarks are identified using
+to perform self-attention along the temporal dimension  t .                                                                                                                                                                                 MediaPipe[22], with points indices such as [93, 323, 152]
+ETM’s output is then merged with the original features                                                                                                                                                                                      defining the bounding boxes for these regions, highlighted
+through residual connections, integrating temporal depen-                                                                                                                                                                                   in red in the stage 2 input of Fig. 2.
+dencies into spatial features.
+   For training, we use the first 5 frames from a real image                                                                                                                                                                                4. Experiments
+sequence and the subsequent 5 frames reconstructed with                                                                                                                                                                                     4.1. Experimental Setup
+LivePortrait [12]. After processing through ETM, we com-
+pute reconstruction loss between the predicted and ground-                                                                                                                                                                                  Datasets. For training, we used the AV Speech datasets (fil-
+truth frames:                                                                                                                                                                                                                               tered to 662 hours) [10] and VFHQ [39] datasets (filtered
+                                                                                                                                                                                                                                            to 2 hours) for pretraining, along with additional talking-
+                                 \setlength {\abovedisplayskip }{3pt} \setlength {\belowdisplayskip }{3pt} \mathcal {L}_{\text {recon}} = \sum _{i=6}^{10} \left \| x_{\text {gt}_i} - f(x_i | x_{\text {gt}_{<6}}) \right \|_2^2,    (9)   head videos from the internet (32 hours) for supervised fine-
+                                                                                                                                                                                                                                            tuning (SFT). For validation, we used the HDTF (filtered to
+where  x_{\text {gt}_i}  denotes the real feature sequence and  x_i  the                                                                                                                                                                    0.83 hours) [47] and RAVDESS (filtered to 0.55 hours) [19]
+reconstructed feature sequence (from LivePortrait or the                                                                                                                                                                                    datasets and supplementary internet data (0.49 hours) for
+Stage 1 decoder). ETM primarily learns to preserve con-                                                                                                                                                                                     qualitative comparisons and human evaluation only. To en-
+sistency in physical features such as neck muscles and ear-                                                                                                                                                                                 sure quality, we applied the Mediapipe [22] face detection
+rings. To this end, we add a region-specific mask to recon-                                                                                                                                                                                 tool to filter out instances with facial movement exceeding
+
+
+
+                                                                                                                                                                                                                                        21079
+                                                                                       Method             FID↓         FVD↓        Sync-C↑    Sync-D↓     T ime
+                                                                                       SadTalker [46]     22.177     233.673        7.326       7.848     18.89s
+          GT
+          GTT
+           G
+
+
+
+
+                                                                                       EchoMimic [6]      23.049     290.190        6.664       8.839     31.10s
+                                                                                       AniPortrait [37]   28.161     235.099        4.547      10.657     29.36s
+                                                                                       Hallo [40]         20.639     174.191        7.497      7.741      20.93s
+                                                                                       Teller (ours)      21.352     173.463        7.696      7.536       0.92s
+        Ours
+         ouurs
+            rs
+         o
+
+
+
+
+                                                                                       Real video           -           -           8.094       6.976       -
+                                                                                    Table 1. Quantitative comparison with existing portrait image an-
+        Hallo
+
+
+
+
+                                                                                    imation approaches on the HDTF dataset. T ime stands for the
+            llo
+         Hallo
+         Ha
+
+
+
+
+                                                                                    averaging time cost of generating one second of 25 fps video.
+AniPortrait
+
+
+
+
+                                                                                       Method                   FID↓        FVD↓        Sync-C↑         Sync-D↓
+               it
+           trait
+        or ra
+      iPort
+
+
+
+
+                                                                                       SadTalker [46]       32.343          487.924         4.304       7.621
+   AniP
+   An
+
+
+
+
+                                                                                       EchoMimic [6]        21.058          668.675         3.292       9.096
+                                                                                       AniPortrait [37]     30.696          476.197         2.321       11.542
+                   EchoMimic
+                                ic
+                             imic
+                           Mim
+
+
+
+
+                                                                                       Hallo [40]           19.826          537.478         4.062        8.552
+                         hoM
+                      Echo
+                     Ec
+
+
+
+
+                                                                                       Teller (ours)        20.352          429.288         4.496       7.936
+ SadTalker
+
+
+
+
+                                                                                       Real video                -             -            5.223        7.069
+                 r
+             ker
+          akle
+       daTl
+    SadT
+
+
+
+
+                                                                                    Table 2. Quantitative comparison with existing portrait image an-
+   Sa
+
+
+
+
+                                                                                    imation approaches on the RAVDESS dataset.
+                Figure 5. Qualitative comparison with existing approaches on
+                HDTF dataset. Videos are available in the supplement. mat.          total time is 71ms, with the VAE encoder and decoder aver-
+                                                                                    aging 25ms, and the Temporal Module averaging 21ms.
+                50%. We further refined the data using Sync-C and Sync-D
+                to exclude samples with low lip-sync scores.                        4.2. Quantitative Results
+                Metrics. Evaluation metrics include Fréchet Inception             Comparison on the HDTF Dataset. Table 1 presents
+                Distance (FID)[15], Fréchet Video Distance (FVD)[33],             quantitative results for portrait animation techniques on the
+                Synchronization-C (Sync-C)[24], and Synchronization-D              HDTF dataset. Our method outperforms others, achiev-
+                (Sync-D)[24]. FID and FVD assess realism, with lower               ing the lowest FVD of 173.463 and a competitive FID of
+                scores indicating better quality, while Sync-C and Sync-D          21.352, indicating high quality and temporal coherence in
+                measure lip synchronization, with higher Sync-C and lower          animated talking heads. Additionally, it achieves the high-
+                Sync-D values indicating better alignment.                         est Sync-C score of 7.696 and the lowest Sync-D score of
+                Implementation Details.                                            7.536, demonstrating excellent lip synchronization. These
+                Stage 1: During pretraining, we follow the architecture de-        results highlight Teller’s effectiveness in maintaining both
+                sign of the Qwen1.5-4B model [2] and initialize the param-         visual fidelity and synchronization.
+                eters randomly. The model is trained on an 8×8 Nvidia              Comparison on the RAVDESS Dataset. Table 2 shows
+                A800 GPU machine with a batch size of 1024, using the              quantitative results on the RAVDESS dataset. Our method
+                AdamW optimizer [20]. We employ a cosine learning rate             again leads in performance, with the lowest FVD of
+                scheduler, with the learning rate decaying from 1e-4 to 1e-6       429.288 and a competitive FID of 20.352, reflecting high-
+                over 40 epochs. In the supervised fine-tuning (SFT) phase,         quality and temporally coherent animations. The highest
+                we again use an 8×8 Nvidia A800 GPU machine, but with              Sync-C score of 4.496 and a competitive Sync-D score
+                a batch size of 512. The AdamW optimizer [20] is used,             of 7.936 further demonstrate superior lip synchronization.
+                along with a cosine learning rate scheduler. The learning          These findings confirm Teller’s strength in producing syn-
+                rate decaying from 1e-5 to 1e-6 over 10 epochs. Stage 2:           chronized and high-fidelity animated portraits.
+                The model is trained on an 8×8 Nvidia A800 GPU machine,
+                with a batch size of 1024, and using the AdamW optimizer.          4.3. Qualitative Results
+                The cosine learning rate scheduler is used, with the learning      Head Movement Comparison. Figure 5 shows a qualita-
+                rate decaying from 1e-4 to 1e-6 over 30 epochs.                    tive comparison of head movements. Teller replicates natu-
+                Real time analysis. The model is inference on an 4 Nvidia          ral head movements more accurately, closely matching the
+                H800 GPU machine. For a 200ms audio input, the average             ground truth (GT) with smooth, realistic turns and subtle
+                processing time of the Whisper encoder is 7ms. In Stage            expression-based adjustments. Competing methods, like
+                1, the average total time is 106ms, with the AR transformer        AniPortrait and EchoMimic, often show abrupt or limited
+                taking an average of 6ms per 16 tokens, and the motion de-         movements, appearing rigid or lifeless. Teller’s autoregres-
+                coder taking an average of 10ms. In Stage 2, the average           sive framework ensures continuity and natural dynamics in
+
+
+
+                                                                               21080
+Sample1
+Sample2
+Sample1
+Sample2
+
+
+
+
+                                                                                        Figure 9. Human evaluation results among our proposed Teller
+                                                                                        and other SoTA methods.
+                                                                                        Emotional Expression. Fig. 4 presents our model has
+Figure 6. Top-k selection (k=15) in FMLG produces diverse facial                        more accurate emotional expression ability due to the better
+expressions and actions with accurate lip sync on the HDTF.                             speech understanding ability of AR transformer.
+                                                                                        Finer Motion Details. Fig. 7 highlights fine motion de-
+                                                                                        tails in neck and earring movements. Compared to other
+                                                                                        methods, Teller produces realistic, nuanced motions syn-
+                                                                                        chronized with speech, capturing subtle audio-driven dy-
+                                                                                        namics that contribute to lifelike and temporally coherent
+                                                                                        animation. The consistent detail across frames underscores
+                                                                                        Teller’s robustness.
+                                                                                        Lip Synchronization Accuracy. Fig. 8 shows superior lip
+                                                                                        synchronization, with Teller aligning generated lip shapes
+                                                                                        closely to natural movements. This high fidelity highlights
+                                                                                        Teller’s strength in producing realistic, synchronized mouth
+                                                                                        motions for convincing talking head animation.
+                                                                                        4.4. Human Evaluation
+                                                                                        We conducted a human evaluation to assess the quality
+                                                                                        of generated animations, focusing on lip synchronization,
+                                                                                        body movement realism, and temporal coherence. Thirty
+           Ours
+           Ours       Hallo
+                     Hallo       AniPortrait
+                                 AniPortrait       EchoMiic
+                                                   EchoMimic        SadTalker
+                                                                    SadTalker
+                                                                                        participants (66.7% aged 24-30, 33.3% aged 30-40; 30%
+Figure 7. Visualization of finer motion details. Videos are avail-                      male, 70% female; 83.3% with AIGC model experience)
+able in the supplementary materials.                                                    rated each animation on a 5-point Likert scale for coherence
+                                                                                        with input and animation quality. A total of 100 videos were
+                                                                                        presented in random order to avoid bias, providing insights
+                                                                                        into subjective perceptions of animation quality and natural
+                                                                                        expression alignment. As shown in Figure 9, participants
+                                                                                        rated Teller highest in lip synchronization, body move-
+                                                                                        ment realism, and temporal coherence, with low variance
+                                                                                        in scores, indicating robust and consistent performance.
+          Input
+           GT     Ours
+                  Ours         Hallo
+                              Hallo      AniPortrait
+                                       AniPortrait       EchoMiic
+                                                       EchoMimic       SadTalker
+                                                                     SadTalker
+
+  Figure 8. Visualization of the generation accuracy of lip shape.                      5. Ablation Study
+head and emotion alignment, essential for lifelike anima-                               Stage (Module) Ablation. We perform an ablation study
+tion.                                                                                   comparing Stage 1 and Stage 2, focusing on animation qual-
+Diversity. Fig. 6 shows two sequences generated with                                    ity in body parts and accessories, especially neck muscles
+Top-k sampling (k=15) in FMLG, where each row rep-                                      and earrings. As shown in Fig. 10, Stage 1 outputs of-
+resents frames from the same speech input. The model                                    ten show less realistic, inconsistent movements. In con-
+demonstrates diverse facial expressions and head move-                                  trast, Stage 2, with ETM, significantly improves the phys-
+ments while maintaining accurate lip sync, highlighting                                 ical consistency of subtle motions, creating natural earring
+Top-k sampling’s role in enhancing motion variety without                               sway and smooth neck movements for lifelike, temporally
+compromising synchronization.                                                           coherent animation.
+
+
+
+                                                                                   21081
+                                                                                                                                             Method         Sync-C ↑     Sync-D ↓
+                                                                                                                                             w funcodec       4.286       10.373
+                                                                                                                                             w whisper        7.696        7.536
+                                                                                                                                 Table 3. Comparison of synchronization for audio conditions us-
+                                                                                                                                 ing funcodec and Whisper in ASR and TTS tasks on HDTF.
+
+                                                                                                                                    Method         FID↓      FVD↓        Sync-C↑      Sync-D↓
+                                                                                                                                    Single-Head    22.110    172.553       7.790       7.474
+                                                                                                                                    Multi-Head     21.352    173.463       7.696       7.536
+                                                                                                                                 Table 4. Comparison of performance between Single-Head and
+                                                                                                                                 Multi-Head on the HDTF dataset.
+
+                                                                                                                                 tecture. We compare single-head and multi-head models
+                                                                                                 Differences                     on FID, FVD, Sync-C, and Sync-D metrics (Table 4). The
+                   Stage1                                   Stage2
+                                                                                               Between Stages
+Figure 10. Visualization of the generation images with different
+                                                                                                                                 single-head model slightly outperforms in FID (22.110 vs.
+stages and the differences between stages.                                                                                       21.352) and has comparable FVD (172.553 vs. 173.463),
+                12frames 32tokens, loss:14.9e-6
+                                                                                                                                 with marginally better synchronization (Sync-C of 7.790
+       14                                                                                                                        vs. 7.696 and Sync-D of 7.474 vs. 7.536). Both archi-
+                                                                                                                                 tectures yield competitive results, though the single-head
+       12
+                                                                                                                                 model slightly excels in synchronization, while the multi-
+       10              8frames 32tokens, loss:9.9e-6
+                                                                                                                                 head model offers greater real-time potential .
+loss
+
+
+
+
+       8
+
+       6
+                                                                                                                                 6. Conclusion
+                                   4frames 32tokens, loss:4.5e-6
+       4                                                                                                                        In this paper, we presented Teller, the first autoregressive
+                                                       2frames 32tokens, loss:2.8e-6
+                                                                                       1frames 32tokens, loss:2.4e-6            framework designed for real-time, audio-driven portrait an-
+       2
+            2      4        6     8     10     12      14   16     18
+                                                            tokens/frame
+                                                                         20     22      24    26     28    30     32   34       imation. Addressing the challenge of realistic and efficient
+                                                                                                                                talking head generation, Teller achieves high-quality anima-
+Figure 11. Tradeoff between performance (loss) and different
+compression(tokens/frame ) ratios.                                                                                              tions at up to 25 FPS, surpassing existing methods in both
+                                                                                                                                fidelity and responsiveness. Extensive experiments demon-
+Frames / Tokens in RVQ Module Figure 11 shows the im-                                                                           strated Teller’s advantages over SoTA audio-driven anima-
+pact of frame and token configurations in the RVQ module                                                                        tion methods, particularly in rendering nuanced movements
+on face shape accuracy in talking head animations. This ab-                                                                     essential for lifelike and visually convincing animations.
+lation study explores how varying frames and tokens affects                                                                     Human evaluations further validate its quality, particularly
+facial movement quality and synchronization. Results show                                                                       in natural expression and lip synchronization. By balanc-
+that increasing frames and tokens improves facial dynam-                                                                        ing computational efficiency with high animation fidelity,
+ics, enhancing lip synchronization and realism, though with                                                                     Teller sets a new standard for real-time talking head ani-
+higher computational costs. We selected 4 frames and 32                                                                         mation, marking a significant advancement in multimodal
+tokens for an optimal balance, adjustable as needed.                                                                            portrait animation frameworks. Additionally, Teller’s AR
+Ablation Study on Audio Condition Encoder. We ana-                                                                              Transformer architecture makes it compatible with existing
+lyzed the performance differences between TTS and ASR                                                                           unified multimodal language models.
+models as audio condition encoders for our task. Specif-
+ically, we used Whisper for the ASR model and funcodec
+for the TTS model. As shown in Table 3, Whisper achieved
+a Sync-C score of 7.696 and a Sync-D score of 7.536, while
+funcodec scored 4.286 in Sync-C and 10.373 in Sync-D.
+These results indicate that our task benefits more from the
+ASR model’s capability to capture the nuances required for
+precise synchronization, as seen in Whisper’s higher Sync-
+C and lower Sync-D scores. This analysis suggests that
+the ASR model is better suited as the audio condition en-
+coder, enhancing the overall quality and synchronization of
+our talking head animation.
+Ablation Study on Single-Head vs. Multi-Head Archi-
+
+
+
+                                                                                                                            21082
+References                                                           [12] Jianzhu Guo, Dingyun Zhang, Xiaoqiang Liu, Zhizhou
+                                                                          Zhong, Yuan Zhang, Pengfei Wan, and Di Zhang. Livepor-
+ [1] Emanuele Aiello, Lili Yu, Yixin Nie, Armen Aghajanyan,               trait: Efficient portrait animation with stitching and retarget-
+     and Barlas Oguz. Jointly training large autoregressive multi-        ing control. arXiv preprint arXiv:2407.03168, 2024. 1, 2, 3,
+     modal models. arXiv preprint arXiv:2309.15564, 2023. 3               5
+ [2] Jinze Bai, Shuai Bai, Yunfei Chu, Zeyu Cui, Kai Dang,           [13] Yuwei Guo, Ceyuan Yang, Anyi Rao, Zhengyang Liang,
+     Xiaodong Deng, Yang Fan, Wenbin Ge, Yu Han, Fei                      Yaohui Wang, Yu Qiao, Maneesh Agrawala, Dahua Lin,
+     Huang, et al. Qwen technical report. arXiv preprint                  and Bo Dai. Animatediff: Animate your personalized text-
+     arXiv:2309.16609, 2023. 6                                            to-image diffusion models without specific tuning. arXiv
+ [3] Andreas Blattmann, Robin Rombach, Huan Ling, Tim Dock-               preprint arXiv:2307.04725, 2023. 3
+     horn, Seung Wook Kim, Sanja Fidler, and Karsten Kreis.          [14] Tianyu He, Junliang Guo, Runyi Yu, Yuchi Wang, Jialiang
+     Align your latents: High-resolution video synthesis with la-         Zhu, Kaikai An, Leyi Li, Xu Tan, Chunyu Wang, Han Hu,
+     tent diffusion models. In Proceedings of the IEEE/CVF Con-           et al. Gaia: Zero-shot talking avatar generation. arXiv
+     ference on Computer Vision and Pattern Recognition, pages            preprint arXiv:2311.15230, 2023. 3
+     22563–22575, 2023. 3                                            [15] Martin Heusel, Hubert Ramsauer, Thomas Unterthiner,
+ [4] Egor Burkov, Igor Pasechnik, Artur Grigorev, and Vic-                Bernhard Nessler, and Sepp Hochreiter. Gans trained by a
+     tor Lempitsky. Neural head reenactment with latent pose              two time-scale update rule converge to a local nash equilib-
+     descriptors. In Proceedings of the IEEE/CVF conference               rium. Advances in neural information processing systems,
+     on computer vision and pattern recognition, pages 13786–             30, 2017. 6
+     13795, 2020. 2                                                  [16] Li Hu. Animate anyone: Consistent and controllable image-
+ [5] Nan Cao, Yu-Ru Lin, Xiaohua Sun, David Lazer, Shixia Liu,            to-video synthesis for character animation. In Proceedings of
+     and Huamin Qu. Whisper: Tracing the spatiotemporal pro-              the IEEE/CVF Conference on Computer Vision and Pattern
+     cess of information diffusion in real time. IEEE transactions        Recognition, pages 8153–8163, 2024. 1, 3, 5
+     on visualization and computer graphics, 18(12):2649–2658,       [17] Jianwen Jiang, Chao Liang, Jiaqi Yang, Gaojie Lin, Tianyun
+     2012. 4                                                              Zhong, and Yanbo Zheng. Loopy: Taming audio-driven
+ [6] Zhiyuan Chen, Jiajiong Cao, Zhiquan Chen, Yuming Li,                 portrait avatar with long-term motion dependency. arXiv
+     and Chenguang Ma. Echomimic: Lifelike audio-driven por-              preprint arXiv:2409.02634, 2024. 3
+     trait animations through editable landmark conditions. arXiv    [18] Borong Liang, Yan Pan, Zhizhi Guo, Hang Zhou, Zhibin
+     preprint arXiv:2407.08136, 2024. 6                                   Hong, Xiaoguang Han, Junyu Han, Jingtuo Liu, Errui Ding,
+ [7] Özgün Çiçek, Ahmed Abdulkadir, Soeren S Lienkamp,                and Jingdong Wang. Expressive talking head generation
+     Thomas Brox, and Olaf Ronneberger. 3d u-net: learn-                  with granular audio-visual control. In Proceedings of the
+     ing dense volumetric segmentation from sparse annota-                IEEE/CVF Conference on Computer Vision and Pattern
+     tion. In Medical Image Computing and Computer-Assisted               Recognition, pages 3387–3396, 2022. 2
+     Intervention–MICCAI 2016: 19th International Conference,        [19] Steven R Livingstone and Frank A Russo. The ryer-
+     Athens, Greece, October 17-21, 2016, Proceedings, Part II            son audio-visual database of emotional speech and song
+     19, pages 424–432. Springer, 2016. 5                                 (ravdess): A dynamic, multimodal set of facial and vocal
+ [8] Runpei Dong, Chunrui Han, Yuang Peng, Zekun Qi, Zheng                expressions in north american english. PloS one, 13(5):
+     Ge, Jinrong Yang, Liang Zhao, Jianjian Sun, Hongyu Zhou,             e0196391, 2018. 5
+     Haoran Wei, et al. Dreamllm: Synergistic multimodal com-        [20] I Loshchilov. Decoupled weight decay regularization. arXiv
+     prehension and creation. arXiv preprint arXiv:2309.11499,            preprint arXiv:1711.05101, 2017. 6
+     2023. 3                                                         [21] Yuanxun Lu, Jinxiang Chai, and Xun Cao. Live speech por-
+ [9] Nikita Drobyshev, Jenya Chelishev, Taras Khakhulin, Alek-            traits: real-time photorealistic talking-head animation. ACM
+     sei Ivakhnenko, Victor Lempitsky, and Egor Zakharov.                 Transactions on Graphics (ToG), 40(6):1–17, 2021. 1
+     Megaportraits: One-shot megapixel neural head avatars. In       [22] Camillo Lugaresi, Jiuqiang Tang, Hadon Nash, Chris Mc-
+     Proceedings of the 30th ACM International Conference on              Clanahan, Esha Uboweja, Michael Hays, Fan Zhang, Chuo-
+     Multimedia, pages 2663–2671, 2022. 2                                 Ling Chang, Ming Guang Yong, Juhyun Lee, et al. Medi-
+[10] Ariel Ephrat, Inbar Mosseri, Oran Lang, Tali Dekel, Kevin            apipe: A framework for building perception pipelines. arXiv
+     Wilson, Avinatan Hassidim, William T. Freeman, and                   preprint arXiv:1906.08172, 2019. 5
+     Michael Rubinstein. Looking to listen at the cocktail party:    [23] Youxin Pang, Yong Zhang, Weize Quan, Yanbo Fan, Xi-
+     a speaker-independent audio-visual model for speech sepa-            aodong Cun, Ying Shan, and Dong-ming Yan. Dpe: Dis-
+     ration. ACM Transactions on Graphics, 37(4):1–11, 2018.              entanglement of pose and expression for general video por-
+     5                                                                    trait editing. In Proceedings of the IEEE/CVF Conference on
+[11] Yuying Ge, Sijie Zhao, Jinguo Zhu, Yixiao Ge, Kun Yi, Lin            Computer Vision and Pattern Recognition, pages 427–436,
+     Song, Chen Li, Xiaohan Ding, and Ying Shan. Seed-x: Mul-             2023. 2
+     timodal models with unified multi-granularity comprehen-        [24] KR Prajwal, Rudrabha Mukhopadhyay, Vinay P Nambood-
+     sion and generation. arXiv preprint arXiv:2404.14396, 2024.          iri, and CV Jawahar. A lip sync expert is all you need for
+     3                                                                    speech to lip generation in the wild. In Proceedings of the
+
+
+
+
+                                                                 21083
+     28th ACM international conference on multimedia, pages            [38] Jinheng Xie, Weijia Mao, Zechen Bai, David Junhao Zhang,
+     484–492, 2020. 6                                                       Weihao Wang, Kevin Qinghong Lin, Yuchao Gu, Zhijie
+[25] Shuai Shen, Wenliang Zhao, Zibin Meng, Wanhua Li, Zheng                Chen, Zhenheng Yang, and Mike Zheng Shou. Show-o:
+     Zhu, Jie Zhou, and Jiwen Lu. Difftalk: Crafting diffusion              One single transformer to unify multimodal understanding
+     models for generalized audio-driven portraits animation. In            and generation. arXiv preprint arXiv:2408.12528, 2024. 3
+     Proceedings of the IEEE/CVF Conference on Computer Vi-            [39] Liangbin Xie, Xintao Wang, Honglun Zhang, Chao Dong,
+     sion and Pattern Recognition, pages 1982–1991, 2023. 2                 and Ying Shan. Vfhq: A high-quality dataset and bench-
+[26] Aliaksandr Siarohin, Stéphane Lathuilière, Sergey Tulyakov,          mark for video face super-resolution. In Proceedings of
+     Elisa Ricci, and Nicu Sebe. First order motion model for               the IEEE/CVF Conference on Computer Vision and Pattern
+     image animation. Advances in neural information processing             Recognition, pages 657–666, 2022. 5
+     systems, 32, 2019. 2                                              [40] Mingwang Xu, Hui Li, Qingkun Su, Hanlin Shang, Li-
+[27] Michał Stypułkowski, Konstantinos Vougioukas, Sen He,                  wei Zhang, Ce Liu, Jingdong Wang, Luc Van Gool, Yao
+     Maciej Zieba, Stavros Petridis, and Maja Pantic. Diffused              Yao, and Siyu Zhu. Hallo: Hierarchical audio-driven vi-
+     heads: Diffusion models beat gans on talking-face genera-              sual synthesis for portrait image animation. arXiv preprint
+     tion. In Proceedings of the IEEE/CVF Winter Conference on              arXiv:2406.08801, 2024. 3, 6
+     Applications of Computer Vision, pages 5091–5100, 2024. 2         [41] Sicheng Xu, Guojun Chen, Yu-Xiao Guo, Jiaolong Yang,
+[28] Quan Sun, Qiying Yu, Yufeng Cui, Fan Zhang, Xiaosong                   Chong Li, Zhenyu Zang, Yizhong Zhang, Xin Tong, and
+     Zhang, Yueze Wang, Hongcheng Gao, Jingjing Liu, Tiejun                 Baining Guo. Vasa-1: Lifelike audio-driven talking faces
+     Huang, and Xinlong Wang. Generative pretraining in multi-              generated in real time. arXiv preprint arXiv:2404.10667,
+     modality. arXiv preprint arXiv:2307.05222, 2023. 3                     2024. 2, 3
+[29] Zhiyao Sun, Tian Lv, Sheng Ye, Matthieu Lin, Jenny Sheng,         [42] Ziyu Yao, Xuxin Cheng, and Zhiqi Huang. Fd2talk: Towards
+     Yu-Hui Wen, Minjing Yu, and Yong-jin Liu. Diffposetalk:                generalized talking head generation with facial decoupled
+     Speech-driven stylistic 3d facial animation and head pose              diffusion model. In Proceedings of the 32nd ACM Interna-
+     generation via diffusion models. ACM Transactions on                   tional Conference on Multimedia, pages 3411–3420, 2024.
+     Graphics (TOG), 43(4):1–9, 2024. 2                                     2
+[30] Zineng Tang, Ziyi Yang, Chenguang Zhu, Michael Zeng, and          [43] Hanrong Ye, De-An Huang, Yao Lu, Zhiding Yu, Wei
+     Mohit Bansal. Any-to-any generation via composable diffu-              Ping, Andrew Tao, Jan Kautz, Song Han, Dan Xu, Pavlo
+     sion. Advances in Neural Information Processing Systems,               Molchanov, et al. X-vila: Cross-modality alignment for large
+     36, 2024. 3                                                            language model. arXiv preprint arXiv:2405.19335, 2024. 3
+[31] Chameleon Team.          Chameleon: Mixed-modal early-            [44] Fei Yin, Yong Zhang, Xiaodong Cun, Mingdeng Cao, Yanbo
+     fusion foundation models, 2024.            URL https://arxiv.          Fan, Xuan Wang, Qingyan Bai, Baoyuan Wu, Jue Wang,
+     org/abs/2405.09818, 2024. 3                                            and Yujiu Yang. Styleheat: One-shot high-resolution ed-
+[32] Linrui Tian, Qi Wang, Bang Zhang, and Liefeng Bo. Emo:                 itable talking face generation via pre-trained stylegan. In
+     Emote portrait alive-generating expressive portrait videos             European conference on computer vision, pages 85–101.
+     with audio2video diffusion model under weak conditions.                Springer, 2022. 2
+     arXiv preprint arXiv:2402.17485, 2024. 3                          [45] Neil Zeghidour, Alejandro Luebs, Ahmed Omran, Jan
+[33] Thomas Unterthiner, Sjoerd Van Steenkiste, Karol Kurach,               Skoglund, and Marco Tagliasacchi. Soundstream: An end-
+     Raphael Marinier, Marcin Michalski, and Sylvain Gelly. To-             to-end neural audio codec. IEEE/ACM Transactions on Au-
+     wards accurate generative models of video: A new metric &              dio, Speech, and Language Processing, 30:495–507, 2021.
+     challenges. arXiv preprint arXiv:1812.01717, 2018. 6                   2
+[34] Duomin Wang, Yu Deng, Zixin Yin, Heung-Yeung Shum,                [46] Wenxuan Zhang, Xiaodong Cun, Xuan Wang, Yong Zhang,
+     and Baoyuan Wang. Progressive disentangled representation              Xi Shen, Yu Guo, Ying Shan, and Fei Wang. Sadtalker:
+     learning for fine-grained controllable talking head synthesis.         Learning realistic 3d motion coefficients for stylized audio-
+     In Proceedings of the IEEE/CVF Conference on Computer                  driven single image talking face animation. In Proceedings
+     Vision and Pattern Recognition, pages 17979–17989, 2023.               of the IEEE/CVF Conference on Computer Vision and Pat-
+     2                                                                      tern Recognition, pages 8652–8661, 2023. 2, 6
+[35] Ting-Chun Wang, Arun Mallya, and Ming-Yu Liu. One-shot            [47] Zhimeng Zhang, Lincheng Li, Yu Ding, and Changjie
+     free-view neural talking-head synthesis for video conferenc-           Fan. Flow-guided one-shot talking face generation with
+     ing. In Proceedings of the IEEE/CVF conference on com-                 a high-resolution audio-visual dataset. In Proceedings of
+     puter vision and pattern recognition, pages 10039–10049,               the IEEE/CVF Conference on Computer Vision and Pattern
+     2021. 1, 2                                                             Recognition, pages 3661–3670, 2021. 5
+[36] Xinlong Wang, Xiaosong Zhang, Zhengxiong Luo, Quan                [48] Chunting Zhou, Lili Yu, Arun Babu, Kushal Tirumala,
+     Sun, Yufeng Cui, Jinsheng Wang, Fan Zhang, Yueze Wang,                 Michihiro Yasunaga, Leonid Shamis, Jacob Kahn, Xuezhe
+     Zhen Li, Qiying Yu, et al. Emu3: Next-token prediction is              Ma, Luke Zettlemoyer, and Omer Levy. Transfusion: Pre-
+     all you need. arXiv preprint arXiv:2409.18869, 2024. 3                 dict the next token and diffuse images with one multi-modal
+[37] Huawei Wei, Zejun Yang, and Zhisheng Wang. Aniportrait:                model. arXiv preprint arXiv:2408.11039, 2024. 3
+     Audio-driven synthesis of photorealistic portrait animation.      [49] Hang Zhou, Yasheng Sun, Wayne Wu, Chen Change Loy,
+     arXiv preprint arXiv:2403.17694, 2024. 6                               Xiaogang Wang, and Ziwei Liu. Pose-controllable talking
+
+
+
+
+                                                                  21084
+     face generation by implicitly modularized audio-visual rep-
+     resentation. In Proceedings of the IEEE/CVF conference on
+     computer vision and pattern recognition, pages 4176–4186,
+     2021. 2
+[50] Yang Zhou, Xintong Han, Eli Shechtman, Jose Echevar-
+     ria, Evangelos Kalogerakis, and Dingzeyu Li. Makelttalk:
+     speaker-aware talking-head animation. ACM Transactions
+     On Graphics (TOG), 39(6):1–15, 2020. 2
+[51] Jinguo Zhu, Xiaohan Ding, Yixiao Ge, Yuying Ge, Sijie
+     Zhao, Hengshuang Zhao, Xiaohua Wang, and Ying Shan.
+     Vl-gpt: A generative pre-trained transformer for vision and
+     language understanding and generation. arXiv preprint
+     arXiv:2312.09251, 2023. 3
+
+
+
+
+                                                               21085
+

@@ -1,0 +1,1212 @@
+                                                 Allo-AVA: A Large-Scale Multimodal Conversational AI Dataset
+                                                           for Allocentric Avatar Gesture Animation
+
+                                                                              Saif Punjwani*        Larry Heck
+                                                                               Georgia Institute of Technology
+                                                                          {spunjwani3, larryheck}@gatech.edu
+
+
+
+                                                                Abstract                              Yoon et al., 2020). These limitations result in unnat-
+                                                                                                      ural or misaligned avatar animations, particularly in
+                                              The scarcity of high-quality, multimodal train-         complex, context-dependent scenarios (Yoon et al.,
+                                              ing data severely hinders the creation of life-
+                                                                                                      2019; Ginosar et al., 2019).
+arXiv:2410.16503v1 [cs.AI] 21 Oct 2024
+
+
+
+
+                                              like avatar animations for conversational AI
+                                              in virtual environments. Existing datasets of-             To address these gaps, we introduce Allo-AVA1 ,
+                                              ten lack the intricate synchronization between          a large-scale multimodal dataset designed for text
+                                              speech, facial expressions, and body move-              and audio-driven avatar animation from an allocen-
+                                              ments that characterize natural human commu-            tric viewpoint. Allo-AVA provides comprehensive
+                                              nication. To address this critical gap, we intro-       data to train models that capture the relationships
+                                              duce Allo-AVA, a large-scale dataset specifi-           between linguistic content, acoustic features, visual
+                                              cally designed for text and audio-driven avatar
+                                                                                                      cues, and conversational context, enabling more
+                                              gesture animation in an allocentric (third per-
+                                              son point-of-view) context. Allo-AVA consists
+                                                                                                      natural and contextually appropriate avatar anima-
+                                              of ∼1,250 hours of diverse video content, com-          tions.
+                                              plete with audio, transcripts, and extracted key-          Table 1 provides an overview of the Allo-AVA
+                                              points. Allo-AVA uniquely maps these key-               dataset’s key features and statistics. The Allo-AVA
+                                              points to precise timestamps, enabling accu-            dataset comprises ∼1,250 hours of high-quality
+                                              rate replication of human movements (body               video, audio, and text data, curated from a wide
+                                              and facial gestures) in synchronization with
+                                                                                                      array of sources such as talk shows, podcasts, TED
+                                              speech. This comprehensive resource enables
+                                              the development and evaluation of more nat-
+                                                                                                      talks, and other public speaking forums. This rep-
+                                              ural, context-aware avatar animation models,            resents a significant increase in data volume com-
+                                              potentially transforming applications ranging           pared to existing datasets, enabling models to learn
+                                              from virtual reality to digital assistants.             from a vastly more diverse and comprehensive set
+                                                                                                      of human gestures and expressions (Kucherenko
+                                         1    Introduction                                            et al., 2021a; Ginosar et al., 2019).
+                                                                                                         The dataset includes over 135 billion extracted
+                                         Recent advances in generative, Transformer-based
+                                                                                                      keypoints, representing detailed body pose infor-
+                                         methods (Vaswani et al., 2017) for Natural Lan-
+                                                                                                      mation across millions of video frames. These key-
+                                         guage Processing (NLP) combined with state-of-
+                                                                                                      points are precisely mapped to timestamps, allow-
+                                         the-art virtual reality technology have opened new
+                                                                                                      ing for accurate synchronization with speech con-
+                                         avenues for human-computer interaction. How-
+                                                                                                      tent (Cao et al., 2018; Lugaresi et al., 2019). The
+                                         ever, creating lifelike avatar animations remains
+                                                                                                      corpus contains approximately 15 million words
+                                         challenging, primarily due to the scarcity of high-
+                                                                                                      of transcribed speech, providing a rich linguistic
+                                         quality, multimodal training data that captures the
+                                                                                                      context for gesture generation.
+                                         synchronization between speech, facial expres-
+                                                                                                         Allo-AVA’s diversity is reflected in its speaker
+                                         sions, and body movements.
+                                                                                                      demographics, spanning a wide range of ages, gen-
+                                            Existing datasets often lack precise speech-
+                                                                                                      ders, and ethnic backgrounds. This diversity is
+                                         gesture synchronization, focus on isolated commu-
+                                                                                                      crucial for training models that can generate ap-
+                                         nication aspects, or fail to capture the allocentric
+                                         perspective crucial for natural gesture generation              1
+                                                                                                           The      dataset     is    publicly     available      at
+                                         in virtual environments (Kucherenko et al., 2020;            https://huggingface.co/datasets/avalab/Allo-AVA.          The
+                                                                                                      collection process, baseline models, and code will be released
+                                             * Lead author                                            with the camera-ready version under GNU Public License.
+
+
+                                                                                                  1
+      Feature                       Value                 of topics and communication styles. Table 2 shows
+      Total number of videos        7,500                 the distribution of content types in the dataset.
+      Total duration             ∼1,250 hours
+      Average video duration      10 minutes                          Content Type           Percentage
+                                                                      TED Talks                 40%
+      Extracted keypoints         135 billion                         Interviews                30%
+      Transcribed words           15 million                          Panel Discussions         20%
+      Words per minute (avg.)        208                              Formal Presentations      10%
+      Gesture categories              85                    Table 2: Distribution of content types in Allo-AVA
+      Emotion categories              12
+      Speaker attributes              25
+      Total annotations           3 million+
+                                                          2.2     Data Processing Pipeline
+      Total size of dataset        2.46 TB
+                                                          Our data processing pipeline, illustrated in Figure 1,
+          Demographics          Percentage                consists of several key steps designed to extract and
+          Male speakers            52%                    align multimodal data from the collected videos
+          Female speakers          48%                    (Ginosar et al., 2019; Ferstl and McDonnell, 2020).
+          Age range              18 to 60+
+          Caucasian                62%
+          African American         14%
+          Asian                    12%
+          Hispanic                  9%
+          Other                     3%
+
+         Table 1: Allo-AVA Dataset Overview
+
+
+propriate gestures across a wide range of speaker
+characteristics and styles.
+
+2     Dataset Creation
+The Allo-AVA dataset was curated using a com-
+prehensive pipeline that leverages diverse online
+video sources to capture a wide range of human
+communicative behaviors. This section details the               Figure 1: Allo-AVA data processing pipeline
+data collection process, processing pipeline, and
+keypoint extraction methods.
+                                                          2.2.1    Video and Audio Extraction
+2.1    Data Collection Process
+                                                          We utilized the yt-dlp library to download videos
+We constructed a list of 140 unique search queries        in the highest available quality, typically 1080p
+focusing on allocentric gestures and nonverbal com-       at 30 fps. Audio tracks were extracted using the
+munication in various contexts. Using the YouTube         moviepy library and saved as 16-bit PCM WAV
+Data API v3, we retrieved the top 50 video results        files with a 48 kHz sampling rate (Wang et al.,
+for each query, resulting in approximately 7,500          2023).
+unique video URLs. To ensure quality and rele-
+vance, we applied the following filters:                  2.2.2    Transcription
+   • Video duration: ≥ 5 minutes                          For generating accurate transcriptions with word-
+   • Minimum view count: 10,000 views                     level timestamps, we employed OpenAI’s Whisper
+   • Language: English                                    ASR model (Radford et al., 2022). We used the
+   • Categories: Education, Entertainment, Sci-           "base" model for efficiency, achieving a Word Error
+     ence & Technology, News & Politics                   Rate (WER) of approximately 6% on our validation
+   This filtering process yielded a diverse set of        set. An example of the transcript output is shown
+7,500 unique video URLs, spanning a wide range            below:
+
+                                                      2
+                                                            average based on the confidence scores provided
+                                                            by each model. This approach allows us to bene-
+                                                            fit from OpenPose’s robustness in full-body pose
+                                                            estimation and MediaPipe’s precision in capturing
+                                                            fine-grained details, resulting in a more comprehen-
+                                                            sive and accurate set of keypoints.
+
+                                                            Keypoint Coordinate System Each keypoint is
+                                                            represented by x, y, and z coordinates, along with
+                                                            a visibility score. The coordinates are normalized
+                                                            as follows:
+                                                                • x: Horizontal position, normalized to [0, 1]
+Figure 2: Keypoint extraction process combining Open-             from left to right of the frame
+Pose and MediaPipe                                              • y: Vertical position, normalized to [0, 1] from
+                                                                  top to bottom of the frame
+ [0.000 --> 6.440] Let's take a look at how the
+                                                                • z: Depth, normalized to [-1, 1], with 0 at the
+ brain receives and processes sensory information                 camera plane, negative values closer to the
+ from the environment.                                            camera, and positive values farther away
+ [6.440 --> 12.000] To get started, let's take a
+ look at regions of the brain and the functions
+                                                                • visibility: A value in [0.0, 1.0] indicating the
+ they provide.                                                    confidence of the keypoint’s presence and lo-
+ ...                                                              cation
+2.2.3 Keypoint Extraction                                      The visibility score, derived from MediaPipe,
+                                                            represents the model’s confidence in the keypoint’s
+A key innovation in our pipeline is the keypoint
+                                                            presence and accuracy. A score of 1.0 indicates
+extraction process, which combines two state-of-
+                                                            high confidence, while lower scores suggest poten-
+the-art pose estimation models: OpenPose (Cao
+                                                            tial occlusion or uncertainty. This score is crucial
+et al., 2018) and MediaPipe (Lugaresi et al., 2019).
+                                                            for applications to determine which keypoints to
+This dual approach allows us to capture a compre-
+                                                            consider in downstream tasks.
+hensive set of body keypoints with high accuracy
+                                                               This normalization ensures that the keypoint data
+and detail. Figure 2 illustrates our keypoint extrac-
+                                                            is consistent across different video resolutions and
+tion process.
+                                                            camera setups, facilitating easier processing and
+OpenPose OpenPose provides robust full-body                 comparison across the dataset.
+pose estimation, extracting 18 keypoints corre-                On average, we extracted 112,500 keypoints
+sponding to major body joints. It uses a bottom-up          per minute of video, resulting in a total of ap-
+approach, first detecting parts and then associating        proximately 135 billion keypoints across the entire
+them with individuals, making it effective for cap-         dataset. The keypoints are stored in a JSON for-
+turing large-scale body movements and handling              mat, with each entry containing a timestamp, an
+multiple people in a scene (Cao et al., 2018).              array of keypoint dictionaries, and the correspond-
+                                                            ing transcribed text. An example of the keypoint
+MediaPipe MediaPipe offers 33 additional key-
+                                                            data structure is shown below:
+points with enhanced detail on hands and facial
+landmarks. It uses a top-down approach, first de-            {
+tecting the person and then estimating the pose,                   "timestamp": 0.167,
+                                                                   "keypoints": [
+which allows for more precise capture of subtle                        {
+gestures (body and facial) (Lugaresi et al., 2019).                        "x": 0.3228517770767212,
+                                                                           "y": 0.25760573148727417,
+Combining OpenPose and MediaPipe To lever-                                 "z": -0.2790754735469818,
+                                                                           "visibility": 0.9973365664482117
+age the strengths of both models, we implemented a                     },
+novel fusion algorithm. For each frame, we extract                     ...
+keypoints using both OpenPose and MediaPipe.                       ],
+                                                                   "transcript": "Today you're going to..."
+We then align the keypoints from both models us-             }
+ing a spatial matching algorithm. For keypoints
+detected by both models, we calculate a weighted                 Figure 2 illustrates how our process combines
+
+                                                        3
+the strengths of both OpenPose and MediaPipe.                  the dataset’s potential for studying complex rela-
+The original video frame is processed by both mod-             tionships between verbal and nonverbal communi-
+els independently. OpenPose provides a robust                  cation. For instance, the strong correlation between
+skeleton structure with 18 keypoints, while Medi-              hand movement and speech rate (0.72) suggests
+aPipe offers more detailed keypoints, particularly             that speakers tend to gesture more frequently and
+for hands and face. Our fusion algorithm then com-             vigorously during periods of rapid speech, a find-
+bines these outputs, resulting in a refined set of key-        ing that could be particularly useful for developing
+points that captures both large-scale body move-               more natural avatar animations.
+ments and fine-grained details. The final output                  The Allo-AVA dataset represents a significant
+includes the combined keypoints along with their               advancement in multimodal datasets for avatar an-
+visibility scores, enabling downstream applications            imation research. Its large scale, diverse content,
+to make informed decisions about keypoint reliabil-            and precise alignment of keypoints with speech and
+ity and usage (Yoon et al., 2020; Kucherenko et al.,           transcripts make it an invaluable resource for de-
+2021b; Ahuja and Morency, 2019).                               veloping more natural and contextually appropriate
+                                                               avatar animations.
+2.3   Dataset Statistics and Structure
+A summary of the Allo-AVA dataset statistics are               3     Dataset Analysis
+shown in Table 1. The Allo-AVA dataset is orga-
+                                                               To gain deeper insights into the Allo-AVA dataset,
+nized into several components, each stored in a
+                                                               we conducted a comprehensive analysis of the ex-
+separate directory:
+                                                               tracted keypoints and their relationship to speech
+   • video/: Contains the original MP4 video files
+                                                               patterns. This analysis provides valuable informa-
+   • audio/: Stores the extracted WAV audio files
+                                                               tion about the distribution of body movements and
+   • transcript/: Contains TXT files with word-
+                                                               their correlation with verbal communication, which
+      level transcriptions and timestamps
+                                                               is crucial for developing accurate avatar animation
+   • keypoints/: Stores JSON files with frame-
+                                                               models.
+      level keypoint data
+   • keypoints_video/: Contains MP4 files vi-                  3.1    3D Keypoint Distribution
+      sualizing the extracted keypoints overlaid on
+      the original video                                       Figure 3 presents a 3D scatter plot of the keypoint
+                                                               distribution across all videos in the dataset. The
+   The entire pipeline was implemented in Python,
+                                                               X, Y, and Z axes in this visualization represent the
+leveraging GPU acceleration where possible to pro-
+                                                               normalized spatial coordinates of the keypoints:
+cess the large volume of data efficiently. On av-
+erage, processing a 10-minute video took approx-                   • X-axis: Represents the horizontal position,
+imately 15 minutes on eight NVIDIA A40 GPUs.                         normalized to [0, 1] from left to right of the
+The total processing time for the entire dataset                     video frame.
+amounted to approximately 3,000 GPU hours.                         • Y-axis: Represents the vertical position, nor-
+   To provide deeper insights into the dataset, we                   malized to [0, 1] from top to bottom of the
+conducted several correlational studies on the ex-                   video frame.
+tracted keypoints. Table 3 presents some interesting               • Z-axis: Represents the depth, normalized to [-
+findings that highlight the intricate relationships be-              1, 1], where 0 is at the camera plane, negative
+tween various aspects of nonverbal communication                     values are closer to the camera, and positive
+captured in the Allo-AVA dataset.                                    values are farther away.
+                                                                  This normalization ensures that the keypoint data
+ Correlation                                  Pearson          is consistent across different video resolutions and
+                                             Coefficient
+ Hand movement vs. speech rate                  0.72
+                                                               camera setups, facilitating easier processing and
+ Gesture amplitude vs. emotional intensity      0.68           comparison across the dataset. The color gradient
+ Head movement vs. turn-taking                  0.59           on the Z-axis provides an additional visual cue for
+ Posture shifts vs. topic changes               0.63
+                                                               depth, with warmer colors (yellows and greens)
+Table 3: Correlations between different aspects of non-        representing points closer to the camera and cooler
+verbal communication in Allo-AVA                               colors (blues and purples) representing points far-
+                                                               ther away.
+  These correlations provide valuable insights into               This visualization offers several key insights into
+
+                                                           4
+                                                            Figure 4: Scatter plot of speech rate versus movement
+                                                            intensity, with correlation statistics.
+
+
+                                                               The plot shows a very weak positive correla-
+Figure 3: 3D distribution of keypoints extracted from       tion (0.0285) between speech rate and movement
+the Allo-AVA dataset. X and Y axes represent normal-        intensity. This suggests that, unlike common as-
+ized frame coordinates, while the Z-axis (and color)        sumptions, there isn’t a strong correlation between
+represents normalized depth.                                speech rate and gesture intensity in our dataset..
+                                                            There is considerable variability in movement inten-
+                                                            sity across all speech rates, indicating that speakers
+the spatial characteristics of our data. The key-           in our dataset exhibit a wide range of gestural be-
+points span a wide range of 3D space, indicating            haviors, regardless of how quickly they are speak-
+that our dataset captures a diverse set of body poses       ing.
+and gestures (body movements and facial expres-
+                                                               Several data points show high movement inten-
+sions). This diversity is crucial for training models
+                                                            sity at various speech rates. These outliers may rep-
+that can generate natural and varied animations
+                                                            resent particularly emphatic gestures or moments
+(Kucherenko et al., 2022; Ferstl and McDonnell,
+                                                            of high emotion, which are valuable for training ex-
+2020).
+                                                            pressive avatar models. The high p-value (0.6249)
+   Visible clusters of keypoints, particularly in the       indicates that the observed correlation is not statisti-
+central regions of the plot, likely correspond to           cally significant. This finding challenges simplistic
+common pose configurations, such as neutral stand-          assumptions about the relationship between speech
+ing positions or frequently used gestures. The              rate and gesture intensity, highlighting the complex
+depth information captured by the Z-axis is essen-          nature of human communication.
+tial for creating realistic 3D avatar animations, as           The lack of a strong correlation between speech
+it allows for accurate representation of the spatial        rate and movement intensity underscores the im-
+relationships between different body parts.                 portance of a large, diverse dataset like Allo-AVA.
+   Some keypoints appear as outliers, positioned far        It suggests that effective avatar animation models
+from the main clusters. These may represent more            need to consider factors beyond just speech rate to
+extreme or less common gestures, which are impor-           generate appropriate gestures (Kucherenko et al.,
+tant to include for comprehensive coverage of hu-           2019; Ahuja and Morency, 2019).
+man movement. The richness of this 3D keypoint
+data enables the development of models that can             3.3   Temporal Movement Intensity
+understand and generate complex, spatially-aware            To further understand the dynamics of movement
+gestures, a significant advancement over 2D-only            in our dataset, we analyzed the temporal patterns
+datasets.                                                   of movement intensity across different body parts.
+                                                            Figure 5 presents a heatmap visualization of this
+3.2   Speech Rate vs. Movement Intensity
+                                                            analysis, offering several crucial insights into the
+Figure 4 illustrates the relationship between speech        nature of human motion captured in Allo-AVA.
+rate (words per second) and movement intensity                 The heatmap reveals differential movement pat-
+across the dataset. This analysis reveals several im-       terns across body parts, with hands and arms gen-
+portant aspects of the relationship between speech          erally showing higher movement intensities. This
+and gesture.                                                aligns with the expectation that gestures primar-
+
+                                                        5
+                                                               Figure 6: Distribution of gesture types in the Allo-AVA
+                                                               dataset, from left to right: Beat, Iconic, Deictic, and
+Figure 5: Temporal heatmap of movement intensity               Metaphoric.
+across different body parts.
+
+
+ily involve upper limb movements. The vertical
+axis, representing time, allows observation of how
+movement intensity changes throughout interac-
+tions, noting periods of high intensity interspersed
+with relative stillness. This pattern reflects the natu-
+ral rhythm of human communication and provides
+valuable data for generating realistic temporal dy-
+namics in avatar animations (Kucherenko et al.,
+2018; Bhattacharya et al., 2021).
+   Importantly, the heatmap includes detailed infor-
+mation on smaller body parts such as individual
+                                                               Figure 7: Cross-correlation of speech features (pitch
+fingers and facial features, demonstrating the high
+                                                               and volume) with gesture intensity.
+level of detail in our keypoint extraction process.
+This granularity is crucial for creating nuanced
+and expressive avatar animations. Furthermore,                 concrete concepts) and metaphoric (representing
+patterns of coordinated movement across multiple               abstract ideas) gestures indicates that our dataset
+body parts are visible, particularly in symmetrical            captures a wide range of communicative intents.
+limbs, which is essential for generating natural-              While slightly less common, the presence of deic-
+looking avatar animations that maintain appropriate            tic (pointing) gestures ensures that models trained
+relationships between different body segments.                 on this dataset can generate appropriate referential
+                                                               movements.
+3.4   Distribution of Gesture Types                               This diverse representation of gesture types en-
+To assess the diversity of gestures in our dataset,            ables the development of avatar animation systems
+we categorized them into four main types: beat,                capable of producing a wide range of naturalistic
+iconic, deictic, and metaphoric. Figure 6 illustrates          gestures, enhancing the expressiveness and com-
+the distribution of these gesture types, demonstrat-           municative power of virtual avatars across various
+ing a relatively balanced representation crucial for           contexts and communication styles.
+training comprehensive gesture generation models
+(Ahuja and Morency, 2019; Alexanderson et al.,                 3.5   Cross-correlation of Speech and Gesture
+2020).                                                         To investigate the temporal relationship between
+   Beat gestures, which are rhythmic movements                 speech and gesture, we performed a cross-
+often used to emphasize speech, are the most com-              correlation analysis between speech features (pitch
+mon in our dataset (Kucherenko et al., 2021b; Ferstl           and volume) and gesture intensity. Figure 7
+and McDonnell, 2018). This aligns with linguistic              presents the results of this analysis, revealing com-
+research suggesting that beat gestures are funda-              plex temporal dynamics in speech-gesture coordi-
+mental to natural speech patterns (McNeill, 1992).             nation.
+The significant presence of iconic (representing                 The non-uniform nature of the correlation curves
+
+                                                           6
+indicates a complex, non-linear relationship be-
+tween speech features and gesture intensity. This
+complexity underscores the need for sophisticated
+models capable of capturing intricate temporal dy-
+namics in avatar animation systems. Notably, pitch
+and volume show different correlation patterns with
+gesture intensity, with volume appearing to have             Figure 8: LBLM Architecture: Multimodal input pro-
+a more immediate correlation while pitch shows               cessing for gesture and mesh generation
+more varied, longer-term correlations (Jonell et al.,
+2020; Ahuja and Morency, 2019).
+   The presence of both positive and negative lags           sequence G∗ given a multimodal input sequence
+in the correlation suggests that gestures can both           X and conversational context C:
+anticipate speech events (negative lag) and react
+to them (positive lag). This bidirectional relation-                   G∗ = arg max pθ (G | X, C)              (1)
+                                                                                    G
+ship is crucial for generating natural-looking ges-
+ture sequences that maintain appropriate temporal            where X = {(Tt , At , Vt )}Tt=1 , with Tt represent-
+relationships with speech. Additionally, the quasi-          ing text, At audio, and Vt video at time t, and pθ
+periodic nature of the correlation curves, particu-          denotes the model parameterized by θ.
+larly for pitch, may reflect the rhythmic aspects of            Figure 8 illustrates the high-level architecture
+speech and gesture coordination, providing valu-             of the LBLM. The LBLM consists of three main
+able insights for modeling the prosodic elements             components:
+of gesture generation.                                       1) Input Layer: Accepts multimodal input se-
+   Our comprehensive analysis demonstrates that              quence X.
+the Allo-AVA dataset provides a nuanced and multi-           2) Multimodal Embedding: Transforms inputs
+faceted representation of human communicative be-            into a joint embedding space using an encoder func-
+havior. The spatial distribution of keypoints, tem-          tion E(·).
+poral dynamics of movement, diverse gesture types,           3) Output Generation: Produces an optimal ges-
+and complex speech-gesture relationships captured            ture sequence G∗ with a mesh-mapped output
+in the dataset offer a solid foundation for advanc-          based on the multimodal embedding and context.
+ing the state-of-the-art in avatar animation. These             We split the Allo-AVA dataset into training
+insights enable the development of more natural,             (80%), validation (10%), and test (10%) sets. The
+expressive, and context-aware animation models               baseline LBLM was trained on 8 NVIDIA A40
+that go beyond simple correlations and capture the           GPUs for 2 days, using a batch size of 32 and the
+true complexity of human communication. Future               Adam optimizer (Kingma and Ba, 2014) with a
+work leveraging the Allo-AVA dataset can focus on            learning rate of 1e-4.
+integrating these various aspects to create highly re-          For evaluation, we used the following metrics:
+alistic and adaptive avatar animation systems capa-          Fréchet Gesture Distance (FGD), Fréchet Inception
+ble of nuanced, context-appropriate gestural com-            Distance (FID) (Heusel et al., 2017; Liu et al., 2022;
+munication (Rebol and Knoche, 2021).                         Neff et al., 2007), and Average Pairwise Distance
+                                                             (APD). The APD is calculated as:
+4     Baseline Experiments and Results
+                                                                                    N −1 N
+                                                                                1 X X
+To demonstrate the utility of the Allo-AVA dataset,                  APD =      N
+                                                                                          ∥pi − pj ∥          (2)
+we implemented a basic Large Body Language                                      2   i=1 j=i+1
+Model (LBLM) architecture and conducted experi-              where N is the batch size and pi , pj are pose vec-
+ments to evaluate its performance.                           tors of the i-th and j-th generated gestures.
+
+4.1    LBLM and Experimental Setup                           4.2   Results and Discussion
+The LBLM generates human-like gestures (body                 Table 4 presents a comparison of our baseline
+and facial movements) and responses from multi-              LBLM with existing approaches. The baseline
+modal inputs. We define the LBLM inference prob-             LBLM, trained on Allo-AVA, outperforms exist-
+lem as generating an optimal multimodal gesture              ing approaches across all metrics. We observed
+
+                                                         7
+    Model                      FGD↓    FID↓       APD↑ demonstrate the dataset’s utility in improving ges-
+    Gesticulator               18.41   145.2       0.62 ture generation across multiple metrics.
+    Speech2Gesture             15.71   132.6       0.71
+                                                           Future work on Allo-AVA will focus on:
+    Baseline LBLM (Ours)       10.20   98.7        0.84
+                                                            • Expanding linguistic and cultural diversity
+Table 4: Comparison of gesture generation models              to enable cross-cultural studies and globally
+based on FGD, FID, and APD metrics.
+                                                              adaptive systems.
+ Model                  Naturalness Appropriateness
+                                                            • Enhancing annotations with fine-grained la-
+ Speech2Gesture          3.2 ± 0.4       3.4 ± 0.3            bels for gestures, emotions, and semantic
+ Baseline LBLM (Ours)    4.1 ± 0.3       4.3 ± 0.2            meanings (Kucherenko et al., 2019).
+                                                            • Incorporating multiview recordings and inter-
+Table 5: Human evaluation results for naturalness and
+appropriateness of generated gestures.                        action scenarios to support 3D reconstruction
+                                                              and study of interactive behaviors.
+                                                            • Improving multimodal synchronization for
+a 35% reduction in FGD and a 25.6% improve-                   capturing subtle expressions and movements
+ment in FID compared to the best previous model               (Ferstl and McDonnell, 2020).
+(Speech2Gesture). The APD of 0.84 indicates an              • Developing domain-specific subsets to facili-
+18.3% improvement in gesture diversity.                       tate targeted research in various contexts.
+   To assess perceptual quality, we conducted a
+                                                           These enhancements will further our understand-
+human evaluation study with 50 participants rating
+                                                        ing of human communication and nonverbal behav-
+the naturalness and appropriateness of gestures on
+                                                        ior, supporting the development of more natural
+a scale of 1 to 5. Results are shown in Table 5.
+                                                        and engaging embodied conversational AI. We in-
+   To analyze gesture coherence, we introduced a
+                                                        vite researchers from diverse fields to collaborate
+Temporal Coherence Score (TCS):
+                                                        and leverage Allo-AVA in pushing the boundaries
+                         T −1
+                                                        of avatar animation and human-computer interac-
+                     1 X
+          TCS =               cos(gt , gt+1 )       (3) tion.
+                   T −1
+                         t=1
+
+where T is the total frames and gt is the gesture           6   Limitations
+vector at time t. Our model achieved a TCS of
+0.89, compared to 0.81 for Speech2Gesture (Wang
+et al., 2023) and 0.76 for Gesticulator (Kucherenko         While Allo-AVA and our baseline LBLM model
+et al., 2020), indicating smoother and more natural-        demonstrate significant improvements in gesture
+looking animations.                                         generation, several limitations must be acknowl-
+   These results underscore the importance of large-        edged. The dataset’s primary focus on English-
+scale, diverse datasets like Allo-AVA in training           language content from Western cultures may re-
+models for complex tasks such as gesture gener-             strict the model’s ability to generate culturally ap-
+ation. The comprehensive coverage of different              propriate gestures for non-Western contexts, poten-
+speakers, contexts, and gesture types enables mod-          tially impacting its global applicability. The model
+els to learn more nuanced relationships between             may also struggle with highly complex or abstract
+speech content and corresponding gestures, paving           gestures requiring deep contextual understanding.
+the way for more natural and engaging virtual hu-           The significant computational resources required
+man interactions (Zhou et al., 2020; Tang et al.,           for training models on Allo-AVA could limit acces-
+2023).                                                      sibility for researchers with constrained computing
+                                                            capabilities. Additionally, the current implemen-
+5     Conclusion and Future Work                            tation may not be optimized for real-time perfor-
+                                                            mance, potentially limiting its immediate applica-
+We presented Allo-AVA, a large-scale multimodal             bility in interactive systems requiring low-latency
+dataset for avatar animation, which significantly ad-       gesture generation. Lastly, while our model shows
+vances the field by providing researchers with com-         improved short-term gesture coherence, maintain-
+prehensive, temporally-aligned data for developing          ing consistency over extended periods remains chal-
+and evaluating models. Our baseline experiments             lenging and requires further investigation.
+
+                                                        8
+7   Ethical Considerations                                   References
+The development and use of large-scale datasets              Chaitanya Ahuja and Louis-Philippe Morency. 2019.
+and AI models for human behavior synthesis raise               Language2pose: Natural language grounded pose
+                                                               forecasting. 2019 International Conference on 3D
+important ethical considerations. Privacy and data             Vision (3DV), pages 719–728.
+protection are paramount; although we have im-
+plemented strict anonymization and data handling             Simon Alexanderson, Gustav Eje Henter, Taras
+protocols, the risk of potential re-identification in          Kucherenko, and Jonas Beskow. 2020. Style-
+                                                               controllable speech-driven gesture synthesis using
+large-scale datasets cannot be entirely eliminated.            normalising flows. Computer Graphics Forum,
+There is also a potential for the model to learn and           39(2):487–496.
+reproduce gestural stereotypes, necessitating on-
+going analysis and implementation of debiasing               Uttaran Bhattacharya, Elizabeth Childs, Nicholas
+                                                               Rewkowski,      and Dinesh Manocha. 2021.
+techniques. The use of publicly available data for
+                                                               Speech2affectivegestures:        Synthesizing co-
+AI model training raises questions about informed              speech gestures with generative adversarial affective
+consent, requiring clear communication about the               expression learning. Proceedings of the 29th ACM
+potential uses of such content in AI research. As              International Conference on Multimedia, pages
+with any technology capable of generating human-               1998–2007.
+like behavior, there is a potential for misuse in cre-       Gary Bradski. 2000. The opencv library. Dr. Dobb’s
+ating deceptive content. We strongly advocate for              Journal of Software Tools, 25(11):120–126.
+responsible use and the development of safeguards
+against such misuse, including watermarking tech-            Zhe Cao, Gines Hidalgo, Tomas Simon, Shih-En Wei,
+                                                               and Yaser Sheikh. 2018. Openpose: realtime multi-
+niques and detection tools for AI-generated content.           person 2d pose estimation using part affinity fields.
+Transparency and accountability are crucial; we are            IEEE transactions on pattern analysis and machine
+committed to maintaining openness about our mod-               intelligence, 43(1):172–186.
+els’ capabilities and limitations, and we support
+                                                             Thomas M. Cover and Joy A. Thomas. 2006. Elements
+efforts to establish industry-wide standards for eth-
+                                                               of Information Theory. John Wiley & Sons.
+ical use of avatar animation technologies.
+                                                             Ylva Ferstl and Rachel McDonnell. 2018. Investigat-
+                                                               ing the use of recurrent motion modelling for speech
+                                                               gesture generation. Proceedings of the 18th Inter-
+                                                               national Conference on Intelligent Virtual Agents,
+                                                               pages 93–98.
+
+                                                             Ylva Ferstl and Rachel McDonnell. 2020. Expressivity
+                                                               in generated co-speech gestures. Computer Anima-
+                                                               tion and Virtual Worlds, 31(6):e1986.
+
+                                                             Shiry Ginosar, Amir Bar, Gefen Kohavi, Caroline Chan,
+                                                               Andrew Owens, and Jitendra Malik. 2019. Learning
+                                                               individual styles of conversational gesture. In Pro-
+                                                               ceedings of the IEEE/CVF Conference on Computer
+                                                               Vision and Pattern Recognition, pages 3497–3506.
+
+                                                             Martin Heusel, Hubert Ramsauer, Thomas Unterthiner,
+                                                              Bernhard Nessler, and Sepp Hochreiter. 2017. Gans
+                                                              trained by a two time-scale update rule converge to
+                                                              a local nash equilibrium. In Advances in Neural
+                                                              Information Processing Systems, pages 6626–6637.
+
+                                                             Matthew Honnibal and Ines Montani. 2017. spacy 2:
+                                                              Natural language understanding with bloom embed-
+                                                              dings, convolutional neural networks and incremen-
+                                                              tal parsing. In To appear in Proceedings of the 7th
+                                                              International Conference on Natural Language Pro-
+                                                              cessing.
+
+                                                             Ian T. Jolliffe and Jorge Cadima. 2016. Principal Com-
+                                                                ponent Analysis. Springer.
+
+
+                                                         9
+Patrik Jonell, Taras Kucherenko, Erik Ekstedt, and Jonas        Norbert Marwan, Maria Carmen Romano, Marco Thiel,
+  Beskow. 2020. Let’s face it: Probabilistic multi-               and Jürgen Kurths. 2007. Recurrence plots for the
+  modal interlocutor-aware generation of facial ges-              analysis of complex systems. Physics Reports, 438(5-
+  tures in dyadic settings. In Proceedings of the 20th            6):237–329.
+  ACM International Conference on Intelligent Virtual
+  Agents, pages 1–8.                                            Brian McFee, Colin Raffel, Dawen Liang, Daniel PW
+                                                                  Ellis, Matt McVicar, Eric Battenberg, and Oriol Nieto.
+Diederik P Kingma and Jimmy Ba. 2014. Adam: A                     2015. librosa: Audio and music signal analysis in
+  method for stochastic optimization. arXiv preprint              python. In Proceedings of the 14th Python in Science
+  arXiv:1412.6980.                                                Conference, pages 18–25.
+
+Taras Kucherenko, Jonas Beskow, and Hedvig Kjell-               David McNeill. 1992. Hand and Mind: What Gestures
+  ström. 2018. Data-driven speech animation using                 Reveal about Thought. University of Chicago Press.
+  convolutional neural networks. In Proceedings of the
+                                                                Michael Neff, Michael Kipp, Irene Albrecht, and Hans-
+  18th International Conference on Intelligent Virtual
+                                                                  Peter Seidel. 2007. Gesture modeling and animation
+  Agents, pages 33–36.
+                                                                  based on a probabilistic re-creation of speaker style.
+Taras Kucherenko, Dai Hasegawa, Gustav Eje Henter,                ACM Transactions on Graphics (TOG), 26(2):5–es.
+  Naoshi Kaneko, and Hedvig Kjellström. 2019. An-               Alec Radford, Jong Wook Kim, Tao Xu, Greg Brock-
+  alyzing input and output representations for speech-            man, Christine McLeavey, and Ilya Sutskever. 2022.
+  driven gesture generation. In Proceedings of the 19th           Robust speech recognition via large-scale weak su-
+  ACM International Conference on Intelligent Virtual             pervision. arXiv preprint arXiv:2212.04356.
+  Agents, pages 97–104.
+                                                                Michael Rebol and Holger Knoche. 2021. Casual con-
+Taras Kucherenko, Patrik Jonell, and Gustav Eje Hen-              versations: A dataset for measuring fairness in ai.
+  ter. 2022. Multimodal co-speech gesture generation              arXiv preprint arXiv:2104.02821.
+  with unsupervised text representation learning. IEEE
+  Transactions on Affective Computing.                          Hiroaki Sakoe and Seibi Chiba. 1978. Dynamic
+                                                                  programming algorithm optimization for spoken
+Taras Kucherenko, Patrik Jonell, Sanne van Waveren,               word recognition. IEEE Transactions on Acoustics,
+  Gustav Eje Henter, Simon Alexanderson, Iolanda                  Speech, and Signal Processing, 26(1):43–49.
+  Leite, and Hedvig Kjellström. 2020. Gesticulator:
+  A framework for semantically-aware speech-driven              David Sculley. 2010. Web-scale k-means clustering. In
+  gesture generation. Proceedings of the International            Proceedings of the 19th International Conference on
+  Conference on Multimodal Interaction, pages 242–                World Wide Web, pages 1177–1178. ACM.
+  250.
+                                                                Tenglong Tang, Ye Liu, Linchao Liu, Shuwen Xie, and
+Taras Kucherenko, Patrik Jonell, Youngwoo Yoon,                   Ping Zhang. 2023. Gesture generation with diffusion
+  Pieter Wolfert, and Gustav Eje Henter. 2021a. A                 models. arXiv preprint arXiv:2302.00332.
+  large, crowdsourced evaluation of gesture generation
+  systems on common data: The genea challenge 2020.             Lloyd N. Trefethen and David Bau III. 1997. Numerical
+  26th International Conference on Intelligent User               Linear Algebra. SIAM.
+  Interfaces, pages 11–21.                                      Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob
+                                                                  Uszkoreit, Llion Jones, Aidan N Gomez, Łukasz
+Taras Kucherenko, Patrik Jonell, Youngwoo Yoon,
+                                                                  Kaiser, and Illia Polosukhin. 2017. Attention is all
+  Pieter Wolfert, and Gustav Eje Henter. 2021b. Mov-
+                                                                  you need. In Advances in Neural Information Pro-
+  ing fast and slow: Analysis of representations and
+                                                                  cessing Systems.
+  post-processing in speech-driven automatic gesture
+  generation. In Proceedings of the 21st ACM Inter-             Cheng Wang, Sicheng Zhao, Fei Gao, and Chenliang
+  national Conference on Intelligent Virtual Agents,              Xu. 2023. Speech2gesture: Learning individual
+  pages 32–39.                                                    styles of conversational gesture. arXiv preprint
+                                                                  arXiv:2308.13413.
+Zhenguang Liu, Shuang Qian, Kaixuan Huang, Zhi-
+  gang Xu, Dingding Cao, and Xiaohai Wen. 2022.                 Youngwoo Yoon, Woo-Ri Ko, Minsu Jang, Jaeyeon
+  Unifiedgesture: A unified gesture synthesis model               Lee, Jaehong Kim, and Geehyuk Lee. 2019. Robots
+  for multiple skeletons. In Proceedings of the 30th              learn social skills: End-to-end learning of co-speech
+  ACM International Conference on Multimedia, pages               gesture generation for humanoid robots. In 2019 In-
+  2776–2784.                                                      ternational Conference on Robotics and Automation
+                                                                  (ICRA), pages 4303–4309. IEEE.
+Camillo Lugaresi, Jiuqiang Tang, Hadon Nash, Chris
+  McClanahan, Esha Uboweja, Michael Hays, Fan                   Youngwoo Yoon, Woo-Ri Ko, Minsu Jang, Jaeyeon
+  Zhang, Chuo-Ling Chang, Ming Guang Yong,                        Lee, Jaehong Kim, and Geehyuk Lee. 2020. Speech
+  Juhyun Lee, et al. 2019. Mediapipe: A framework                 gesture generation from the trimodal context of text,
+  for building perception pipelines. arXiv preprint               audio, and speaker identity. ACM Transactions on
+  arXiv:1906.08172.                                               Graphics, 39(6):1–16.
+
+
+                                                           10
+Yuliang Zhou, Marc Habermann, Weipeng Xu, Ikhsanul           • presentation hand movements
+  Habibie, Christian Theobalt, and Feng Xu. 2020. To-
+  wards 4d human body capture in the wild. arXiv             • presentation nonverbal communication
+  preprint arXiv:2007.11431.                                 • lecture gestures
+
+A     Dataset Collection and Processing                      • lecture body language
+      Details                                                • lecture hand movements
+A.1    Keyword Selection                                     • lecture nonverbal communication
+The Allo-AVA dataset was curated using a compre-             • vlog gestures
+hensive list of 140 keywords and phrases related to
+                                                             • vlog body language
+allocentric gestures and nonverbal communication.
+These keywords were carefully selected to capture            • vlog hand movements
+a wide range of communication scenarios and con-             • vlog nonverbal communication
+texts. The full list of keywords used in our data
+collection process is as follows:                            • interview show gestures
+
+                                                             • interview show body language
+    • TED talk gestures
+                                                             • interview show hand movements
+    • TED talk body language
+                                                             • interview show nonverbal communication
+    • TED talk hand movements
+                                                             • talk show gestures
+    • TED talk nonverbal communication
+                                                             • talk show body language
+    • podcast gestures
+                                                             • talk show hand movements
+    • podcast body language
+                                                             • talk show nonverbal communication
+    • podcast hand movements
+                                                             • debate gestures
+    • podcast nonverbal communication
+                                                             • debate body language
+    • comedy show gestures
+                                                             • debate hand movements
+    • comedy show body language
+                                                             • debate nonverbal communication
+    • comedy show hand movements
+                                                             • panel discussion gestures
+    • comedy show nonverbal communication
+                                                             • panel discussion body language
+    • interview gestures
+                                                             • panel discussion hand movements
+    • interview body language
+                                                             • panel discussion nonverbal communication
+    • interview hand movements
+                                                             • conference gestures
+    • interview nonverbal communication
+                                                             • conference body language
+    • news anchor gestures
+                                                             • conference hand movements
+    • news anchor body language                              • conference nonverbal communication
+    • news anchor hand movements                             • seminar gestures
+    • news anchor nonverbal communication                    • seminar body language
+    • public speaking gestures                               • seminar hand movements
+    • public speaking body language                          • seminar nonverbal communication
+    • public speaking hand movements                         • webinar gestures
+    • public speaking nonverbal communication                • webinar body language
+
+    • presentation gestures                                  • webinar hand movements
+
+    • presentation body language                             • webinar nonverbal communication
+
+
+                                                        11
+• workshop gestures                                  • fitness video hand movements
+
+• workshop body language                             • fitness video nonverbal communication
+
+• workshop hand movements                            • dance tutorial gestures
+
+• workshop nonverbal communication                   • dance tutorial body language
+
+• training session gestures                          • dance tutorial hand movements
+
+• training session body language                     • dance tutorial nonverbal communication
+
+• training session hand movements                    • music video gestures
+
+• training session nonverbal communication           • music video body language
+
+• motivational speech gestures                       • music video hand movements
+
+• motivational speech body language                  • music video nonverbal communication
+
+• motivational speech hand movements                 • cooking show gestures
+
+• motivational speech nonverbal communication        • cooking show body language
+
+• political speech gestures                          • cooking show hand movements
+
+• political speech body language                     • cooking show nonverbal communication
+
+• political speech hand movements                    • DIY tutorial gestures
+
+• political speech nonverbal communication           • DIY tutorial body language
+
+• ceremony gestures                                  • DIY tutorial hand movements
+
+• ceremony body language                             • DIY tutorial nonverbal communication
+
+• ceremony hand movements                            • makeup tutorial gestures
+
+• ceremony nonverbal communication                   • makeup tutorial body language
+
+• award show gestures                                • makeup tutorial hand movements
+
+• award show body language                           • makeup tutorial nonverbal communication
+
+• award show hand movements                          • fashion show gestures
+
+• award show nonverbal communication                 • fashion show body language
+
+• reality show gestures                              • fashion show hand movements
+
+• reality show body language                         • fashion show nonverbal communication
+
+• reality show hand movements                        • product review gestures
+
+• reality show nonverbal communication               • product review body language
+
+• game show gestures                                 • product review hand movements
+
+• game show body language                            • product review nonverbal communication
+
+• game show hand movements                           • unboxing video gestures
+
+• game show nonverbal communication                  • unboxing video body language
+
+• sports commentary gestures                         • unboxing video hand movements
+
+• sports commentary body language                    • unboxing video nonverbal communication
+
+• sports commentary hand movements                   • travel vlog gestures
+
+• sports commentary nonverbal communication          • travel vlog body language
+
+• fitness video gestures                             • travel vlog hand movements
+
+• fitness video body language                        • travel vlog nonverbal communication
+
+
+                                                12
+   • reaction video gestures
+
+   • reaction video body language
+
+   • reaction video hand movements
+
+   • reaction video nonverbal communication
+
+   • prank video gestures
+
+   • prank video body language
+
+   • prank video hand movements
+
+   • prank video nonverbal communication
+
+   • challenge video gestures
+
+   • challenge video body language
+
+   • challenge video hand movements
+
+   • challenge video nonverbal communication
+                                                            Figure 9: Detailed data processing pipeline for Allo-
+   • allocentric gestures                                   AVA
+   • allocentric body language
+
+   • allocentric hand movements                             A.3.1    Video and Audio Extraction
+   • allocentric nonverbal communication                    We utilized the yt-dlp library to download videos
+   • allocentric perspective gestures                       in the highest available quality, typically 1080p
+                                                            at 30 fps. Audio tracks were extracted using the
+   • allocentric perspective body language                  moviepy library and saved as 16-bit PCM WAV
+   • allocentric perspective hand movements                 files with a 48 kHz sampling rate.
+   • allocentric perspective nonverbal communication
+                                                            A.3.2    Transcription
+A.2   Video Filtering Criteria                              For generating accurate transcriptions with word-
+To ensure the quality and relevance of the collected        level timestamps, we employed OpenAI’s Whisper
+videos, we applied the following filtering criteria:        ASR model. We used the "base" model for effi-
+                                                            ciency, achieving a Word Error Rate (WER) of
+   • Minimum duration: 5 minutes                            approximately 6% on our validation set.
+   • Minimum view count: 10,000 views
+                                                            A.3.3    Keypoint Extraction
+   • Language: English                                      Our keypoint extraction process combines two
+   • Categories: Education, Entertainment, Sci-             state-of-the-art pose estimation models: OpenPose
+     ence & Technology, News & Politics                     and MediaPipe. This dual approach allows us to
+                                                            capture a comprehensive set of body keypoints with
+   • Video quality: At least 720p resolution                high accuracy and detail.
+
+   • Content focus: Clear visibility of speaker’s           A.4     Keypoint Extraction and Fusion
+     full body
+                                                            The keypoint extraction and fusion process is a
+A.3   Extra Data Processing Pipeline                        critical component of our pipeline. We leverage the
+      Information                                           strengths of both OpenPose (Cao et al., 2018) and
+Our data processing pipeline consists of several            MediaPipe (Lugaresi et al., 2019) to obtain a rich
+key steps designed to extract and align multimodal          set of keypoints. Algorithm 3 details the fusion
+data from the collected videos. Figure 9 provides a         process.
+detailed overview of this pipeline.                            This algorithm ensures that we leverage the
+  The pipeline includes the following major com-            strengths of both models, resulting in a more com-
+ponents:                                                    prehensive and accurate set of keypoints.
+
+                                                       13
+Algorithm 1 Keypoint Fusion Algorithm                         B     Gesture Classification
+Require: OpenPose keypoints KOP , MediaPipe
+                                                              B.1    Gesture Taxonomy
+    keypoints KM P
+Ensure: Fused keypoints Kf used                               To categorize the diverse range of gestures in the
+ 1: Kf used ← {}                                              Allo-AVA dataset, we adopted the gesture taxon-
+ 2: for each joint j in skeleton do                           omy (McNeill, 1992) and extended it to include
+ 3:     if j in KOP and j in KM P then                        additional categories relevant to our dataset. Ta-
+ 4:          wOP ← confidence(KOP [j])                        ble 6 presents an overview of this classification
+ 5:          wM P ← confidence(KM P [j])                      system.
+ 6:          Kf used [j]                 ←
+    wOP ·KOP [j]+wM P ·KM P [j]                                Category     Subcategories
+           wOP +wM P                                           Deictic      Pointing, Indicating, Referential
+ 7:    else if j in KOP then                                   Iconic       Object-mimicking, Action-mimicking, Spatial
+ 8:        Kf used [j] ← KOP [j]                               Metaphoric   Abstract concept, Emotional state, Magnitude
+ 9:    else if j in KM P then                                  Beat         Rhythmic, Emphasis, Pacing
+                                                               Emblematic   Cultural-specific, Universal
+10:        Kf used [j] ← KM P [j]                              Adaptors     Self-touching, Object-manipulation
+11:    end if
+12: end forreturn Kf used                                             Table 6: Allo-AVA Gesture Taxonomy
+
+
+
+                                                              C     Speech-Gesture Correlation Analysis
+A.5   Temporal Alignment
+                                                              C.1    Cross-modal Correlation Metrics
+To ensure precise synchronization between key-
+                                                              To analyze the relationship between speech and
+points, transcriptions, and audio, we developed a
+                                                              gesture, we employed several established cross-
+custom temporal alignment algorithm based on Dy-
+                                                              modal correlation metrics. Table 7 provides an
+namic Time Warping (DTW) (Sakoe and Chiba,
+                                                              overview of these metrics and their interpretations.
+1978). Algorithm 2 outlines this process.
+                                                                 These metrics provide a comprehensive view
+                                                              of the complex relationships between speech and
+Algorithm 2 Temporal Alignment Algorithm                      gesture in our dataset (Cover and Thomas, 2006).
+Require: Keypoint sequence K, Transcript T , Au-
+    dio features A                                            D     Advanced Keypoint Analysis
+Ensure: Aligned data Daligned
+                                                              D.1    Principal Component Analysis of
+ 1: Daligned         ←        {},      WK           ←
+                                                                     Keypoints
+    ExtractMotionFeatures(K),          WA           ←
+    ExtractAudioFeatures(A)                                   To better understand the underlying structure of
+ 2: DT Wmatrix                                      ←         our keypoint data, we performed Principal Compo-
+    ComputeDTWMatrix(WK , WA )                                nent Analysis (PCA) (Jolliffe and Cadima, 2016)
+ 3: path ← BacktrackOptimalPath(DT Wmatrix )                  on the extracted keypoints. Figure 10 shows the
+ 4: for (i, j) in path do                                     distribution of keypoints projected onto the first
+ 5:     taligned ← InterpolateTimestamp(i, j)                 two principal components.
+ 6:     kaligned , aaligned ← K[i], A[j]                         This visualization reveals several key insights:
+ 7:     taligned                                    ←
+    FindClosestTranscript(T, taligned )                           • The wide spread of points indicates a high de-
+ 8:     Daligned .append(taligned , kaligned , aaligned )           gree of variability in the captured poses, sug-
+ 9: end forreturn Daligned                                          gesting that our dataset encompasses a diverse
+                                                                    range of gestures and body positions.
+
+   This algorithm ensures that keypoints, audio fea-              • The presence of distinct clusters (e.g., the
+tures, and transcripts are precisely aligned, account-              dense regions in the center and the sparser
+ing for potential variations in timing across modali-               regions at the edges) may correspond to com-
+ties.                                                               mon pose types or gesture categories.
+
+                                                         14
+Metric                                                                  Description
+Mutual Information (MI)                                                 Measures the mutual dependence between speech and gesture features.
+Canonical Correlation Analysis (CCA)                                    Identifies linear combinations of speech and gesture features that have maximum
+                                                                        correlation.
+Dynamic Time Warping (DTW)                                              Computes the optimal alignment between speech and gesture sequences.
+Cross-recurrence Quantification Analysis (CRQA) (Marwan et al., 2007)   Quantifies the dynamics of recurrent structures in speech-gesture interactions.
+
+
+                                               Table 7: Cross-modal correlation metrics
+
+
+
+
+Figure 10: PCA of keypoints extracted from the Allo-                           Figure 11: Truncated SVD of keypoints from the Allo-
+AVA dataset                                                                    AVA dataset
+
+
+   • The continuous nature of the distribution sug-                            D.3     MiniBatch K-means Clustering of
+     gests that our dataset captures smooth transi-                                    Keypoints
+     tions between different poses, which is crucial
+     for generating natural-looking animations.                                To further investigate underlying structure and pat-
+                                                                               terns within our keypoint data, we employed Mini-
+D.2 Truncated Singular Value Decomposition                                     Batch K-means clustering (Sculley, 2010), a vari-
+    of Keypoints                                                               ant of the K-means algorithm optimized for large
+                                                                               datasets. Figure 12 presents the results of this clus-
+To further analyze the dimensionality of our                                   tering analysis.
+keypoint data, we performed a truncated Singu-
+lar Value Decomposition (SVD) (Trefethen and
+Bau III, 1997). Figure 11 displays the results of
+this analysis.
+   The truncated SVD visualization provides addi-
+tional insights:
+
+   • The overall shape of the distribution is similar
+     to the PCA plot, confirming the consistency
+     of our dimensional reduction techniques.
+
+   • The more pronounced "tails" in the SVD plot
+     may indicate the presence of rarer, more ex-
+     treme poses or gestures in our dataset.
+
+   • The density variations across the plot suggest
+     that certain pose configurations are more com-
+     mon than others, which aligns with expected                               Figure 12: MiniBatch K-means Clustering of keypoints
+     patterns in natural human movement.                                       extracted from the Allo-AVA dataset
+
+
+                                                                          15
+   This visualization offers several significant in-
+sights into the spatial distribution and clustering
+tendencies of our keypoint data:
+   The clustering results reveal distinct regions of
+keypoint concentration, each represented by differ-
+ent colors. The central yellow cluster corresponds
+to neutral or resting positions, serving as a common
+reference point across various gestures and poses.
+The expansive blue region extending upwards sug-
+gests a continuum of upper body movements, po-
+tentially capturing a wide range of arm and hand
+gestures crucial for expressive communication.
+   Of particular interest is the dense, elongated cyan
+cluster extending downwards, which may represent
+lower body positions and movements. The clear
+separation between upper and lower body clusters
+underscores the importance of capturing full-body
+dynamics in avatar animation, as it highlights the
+potential for independent yet coordinated move-                     Figure 13: OpenPose keypoint structure
+ments between these regions.
+   The presence of smaller, isolated clusters (e.g.,
+the green points scattered throughout) indicates
+the capture of less frequent but potentially signifi-
+cant pose configurations. The outliers represent the
+full spectrum of human gestures, including more
+extreme or specialized movements that may be crit-
+ical for certain communicative contexts.
+   The asymmetry observed in the distribution, par-
+ticularly the extension towards the right side of
+                                                                    Figure 14: MediaPipe keypoint structure
+the plot, suggests a bias towards right-handed ges-
+tures in our dataset. This observation aligns with
+the predominance of right-handedness in the gen-              for efficient handling of multiple subjects within a
+eral population and highlights the need for careful           single frame, a crucial feature for analyzing com-
+consideration of handedness in gesture generation             plex scenes. OpenPose detects 18 key body points,
+models.                                                       including major joints and select facial landmarks.
+   The gradual color transitions between clusters                The 18 keypoints detected by OpenPose are as
+indicate smooth interpolations between different              follows:
+pose categories, a factor essential for generating
+fluid and natural-looking animations.                          0 - Nose
+                                                               1 - Neck
+D.4     Keypoint Extraction and Fusion                         2 - Right Shoulder
+Our keypoint extraction process leverages two state-           3 - Right Elbow
+of-the-art pose estimation models: OpenPose and                4 - Right Wrist
+MediaPipe. Figure 13 shows the keypoint structure              5 - Left Shoulder
+used by OpenPose, while Figure 14 illustrates the              6 - Left Elbow
+MediaPipe keypoint model.                                      7 - Left Wrist
+                                                               8 - Right Hip
+D.4.1    OpenPose                                              9 - Right Knee
+OpenPose provides a robust framework for multi-               10 - Right Ankle
+person keypoint detection, employing a bottom-up              11 - Left Hip
+approach that first detects body parts and then asso-         12 - Left Knee
+ciates them with individuals. This method allows              13 - Left Ankle
+
+                                                         16
+14 - Right Eye                                            32 - Right Foot Index
+15 - Left Eye                                                This comprehensive set of keypoints enables pre-
+16 - Right Ear                                            cise tracking of facial expressions, hand gestures,
+17 - Left Ear                                             and full-body movements.
+   This configuration provides a comprehensive            D.4.3 Fusion Algorithm
+skeletal representation that forms the foundation
+                                                          To leverage the strengths of both models, we devel-
+for our gesture analysis.
+                                                          oped a novel fusion algorithm that combines the
+D.4.2   MediaPipe                                         outputs of OpenPose and MediaPipe. Algorithm 3
+                                                          outlines this process.
+MediaPipe complements OpenPose by offering
+a more detailed keypoint model, particularly ex-          Algorithm 3 Enhanced Keypoint Fusion Algorithm
+celling in hand and facial feature detection. We          Require: OpenPose keypoints KOP , MediaPipe
+specifically utilized MediaPipe’s Pose Landmarker             keypoints KM P
+model, which detects 33 body keypoints. This ex-          Ensure: Fused keypoints Kf used
+panded set of points allows for finer tracking of          1: Kf used ← {}
+subtle movements and expressions, crucial for cap-         2: for each joint j in combined skeleton do
+turing the nuances of human communication.                 3:     if j in KOP and j in KM P then
+   The MediaPipe Pose Landmarker model identi-             4:          wOP ← ConfidenceScore(KOP [j])
+fies the following 33 keypoints:                           5:          wM P ← ConfidenceScore(KM P [j])
+ 0 - Nose                                                  6:          wtotal ← wOP + wM P
+ 1 - Left Eye (Inner)                                      7:          Kf used [j].pos      ←       (wOP ·
+ 2 - Left Eye                                                 KOP [j].pos + wM P · KM P [j].pos)/wtotal
+ 3 - Left Eye (Outer)                                      8:          Kf used [j].conf                 ←
+ 4 - Right Eye (Inner)                                        max(KOP [j].conf, KM P [j].conf )
+ 5 - Right Eye                                             9:     else if j in KOP then
+ 6 - Right Eye (Outer)                                    10:          Kf used [j] ← KOP [j]
+ 7 - Left Ear                                             11:     else if j in KM P then
+ 8 - Right Ear                                            12:          Kf used [j] ← KM P [j]
+ 9 - Mouth (Left)                                         13:     end if
+10 - Mouth (Right)                                        14:     if j is a hand or face keypoint then
+11 - Left Shoulder                                        15:          Kf used [j]                      ←
+12 - Right Shoulder                                           RefineWithMediaPipe(Kf used [j])
+13 - Left Elbow                                           16:     end if
+14 - Right Elbow                                          17: end for
+15 - Left Wrist                                           18: Kf used ← TemporalSmoothing(Kf used )
+16 - Right Wrist                                          19: Kf used ← AnatomicalConstraints(Kf used )
+17 - Left Pinky                                               return Kf used
+18 - Right Pinky
+19 - Left Index                                              This enhanced algorithm includes several key
+20 - Right Index                                          steps:
+21 - Left Thumb                                              • Weighted averaging of keypoints detected by
+22 - Right Thumb                                               both models, based on their confidence scores
+23 - Left Hip
+24 - Right Hip                                               • Preference for MediaPipe’s detection for hand
+25 - Left Knee                                                 and face keypoints due to its higher granular-
+26 - Right Knee                                                ity in these areas
+27 - Left Ankle
+                                                             • Temporal smoothing to reduce jitter and en-
+28 - Right Ankle
+                                                               sure consistency across frames
+29 - Left Heel
+30 - Right Heel                                              • Application of anatomical constraints to pre-
+31 - Left Foot Index                                           vent physically impossible poses
+
+                                                     17
+D.5     Additional Analyses                                  generating appropriately nuanced gestures across
+To further elucidate the intricate relationships be-         various communicative contexts.
+tween speech, gesture, and context captured in the           D.5.2   Gesture Trajectory Analysis
+Allo-AVA dataset, we conducted several in-depth
+analyses that provide valuable insights for the de-          The 3D trajectories of hand movements during
+velopment of sophisticated avatar animation mod-             different types of gestures, as visualized in Fig-
+els.                                                         ure 16, offer profound insights into the spatial
+                                                             characteristics of various gesture categories. Each
+D.5.1    Temporal Gesture Evolution                          gesture type—Deictic, Iconic, Metaphoric, and
+Figure 15 presents a detailed analysis of the tem-           Beat—exhibits distinct trajectory patterns that re-
+poral evolution of gesture intensity in relation to          flect its communicative function.
+speech features. This visualization reveals a com-
+plex interplay between gestural movements and
+speech characteristics. The graph demonstrates a
+clear relationship between gesture intensity and
+speech features such as volume and pitch. Notably,
+peaks in gesture intensity often coincide with or
+slightly lag behind peaks in speech volume and
+pitch, suggesting that gestures frequently serve to
+emphasize or complement spoken content.
+
+
+
+
+                                                             Figure 16: 3D trajectories of hand movements during
+Figure 15: Temporal evolution of gesture intensity in        different gesture types
+relation to speech features
+                                                                Deictic gestures, primarily used for pointing, dis-
+   Interestingly, the data also reveals instances of         play more linear and directed movements, while
+gesture anticipation, where increases in gesture             beat gestures manifest as repetitive, rhythmic pat-
+intensity precede changes in speech volume or                terns that punctuate speech. Iconic gestures, which
+pitch. This phenomenon indicates that gestures               often depict concrete objects or actions, present
+can function as preparatory movements for upcom-             more intricate paths, reflecting the complexity of
+ing speech events, highlighting the predictive na-           the concepts they represent. Metaphoric gestures,
+ture of nonverbal communication. The relationship            used to convey abstract ideas, tend to occupy a
+between speech and gesture exhibits significant              larger gestural space with sweeping movements,
+variability throughout the sequence, with varying            illustrating the expansive nature of the concepts
+degrees of temporal alignment. This variability              they embody.
+underscores the dynamic and context-dependent                   The spatial distribution of these trajectories
+nature of speech-gesture coordination, a crucial             demonstrates how different gesture types utilize the
+consideration for developing naturalistic avatar ani-        speaker’s gesture space, a crucial factor in develop-
+mation systems.                                              ing realistic and varied gesture generation models.
+   The observed range of gesture intensity, span-            Moreover, the clear three-dimensional nature of
+ning from near-zero to peaks exceeding 2.5, cap-             these gestures underscores the importance of cap-
+tures a wide spectrum of nonverbal behaviors, from           turing depth information in our dataset, as it is
+subtle movements to pronounced gestures. This                essential for creating truly lifelike avatar anima-
+diversity is essential for training models capable of        tions.
+
+                                                        18
+D.5.3 Pose Similarity Heatmap                                 ensure ethical use of the data, we implemented the
+Figure 17 presents a heatmap visualizing the sim-             following measures:
+ilarity between different poses across the dataset,
+revealing the underlying structure of the gestural               • Adherence to YouTube’s Terms of Service and
+space captured in Allo-AVA. The diagonal blocks                    API usage guidelines.
+of high similarity indicate clusters of related poses,
+likely corresponding to common gesture types or                  • Exclusion of content marked as "unlisted" or
+resting positions that occur frequently in natural                 "private" by content creators.
+communication.
+                                                                 • Implementation of a takedown procedure for
+                                                                   content creators who wish to have their data
+                                                                   removed from the dataset.
+
+                                                                 • Creation of usage guidelines that prohibit the
+                                                                   use of the dataset for individual identification
+                                                                   or tracking purposes.
+
+                                                              E.2   Anonymization Techniques
+                                                              To protect the privacy of individuals in the dataset,
+                                                              we applied several anonymization techniques:
+
+                                                                 • Face blurring in keypoint visualization videos
+                                                                   using OpenCV’s (Bradski, 2000) face detec-
+                                                                   tion and blurring algorithms.
+Figure 17: Heatmap of pose similarities across the               • Voice pitch modification in audio files using
+dataset
+                                                                   the librosa library (McFee et al., 2015), with
+                                                                   random pitch shifts within a range that pre-
+   Of particular interest are the off-diagonal pat-
+                                                                   serves intelligibility but alters voice character-
+terns, which reveal relationships between different
+                                                                   istics.
+pose clusters. These patterns potentially represent
+common gesture transitions, providing crucial in-                • Replacement of proper nouns in transcripts
+formation for generating smooth and natural se-                    with generic placeholders using Named En-
+quences of gestures. The presence of both high and                 tity Recognition (NER) techniques from the
+low similarity regions in the heatmap demonstrates                 spaCy library (Honnibal and Montani, 2017).
+the rich diversity of poses captured in our dataset, a
+key factor in training models capable of generating           E.3   Bias Mitigation
+a wide range of gestures.
+   Furthermore, the heatmap suggests a hierarchi-             To address potential biases in the dataset, we im-
+cal structure in the pose space, with some poses              plemented the following strategies:
+being more closely related than others. This hier-
+archical nature could inform the development of                  • Diversity tracking to ensure representation
+sophisticated, hierarchical models for gesture gen-                across demographics, using metadata from
+eration, capable of capturing both broad gestural                  video descriptions and automatic classifica-
+categories and fine-grained variations within those                tion techniques.
+categories.
+                                                                 • Regular audits of the dataset composition to
+E     Ethical Considerations and Data                              identify and address underrepresented groups
+      Privacy                                                      or contexts.
+E.1    Consent and Usage Rights                                  • Documentation of known biases and limita-
+All videos in the Allo-AVA dataset were collected                  tions in the dataset documentation to inform
+from publicly available sources on YouTube. To                     users and encourage responsible use.
+
+                                                         19
+F     Computational Resources and
+      Optimization
+F.1   Hardware Specifications
+The Allo-AVA dataset was processed using the fol-
+lowing hardware setup:
+
+    • 8 NVIDIA A40 GPUs (48GB VRAM each)
+
+    • 2 AMD EPYC 7742 64-Core Processors
+
+    • 1 TB RAM
+
+    • 200 TB NVMe SSD storage
+
+F.2   Optimization Techniques
+To efficiently process the large volume of data, we
+employed several optimization techniques:
+
+    • Parallel processing using Python’s multipro-
+      cessing library to utilize all available CPU
+      cores.
+
+    • GPU acceleration for keypoint extraction and
+      video processing tasks using CUDA-enabled
+      libraries.
+
+    • Efficient data loading and preprocessing us-
+      ing PyTorch’s DataLoader with custom collate
+      functions.
+
+    • Caching of intermediate results to avoid re-
+      dundant computations.
+
+  These optimizations allowed us to process the
+entire dataset in approximately 3,000 GPU hours.
+
+
+
+
+                                                      20
+

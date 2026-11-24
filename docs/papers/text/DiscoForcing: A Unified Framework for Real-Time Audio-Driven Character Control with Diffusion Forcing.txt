@@ -1,0 +1,750 @@
+                                                       DiscoForcing: A Unified Framework for Real-Time Audio-Driven
+                                                                  Character Control with Diffusion Forcing
+
+
+                                                      Kaiyang Ji 1 2 * Bingsheng Qian 1 2 * Binghuan Wu 1 Kangyi Chen 1 Ye Shi 1 2 Jingya Wang 1 †
+
+
+                                                                    Abstract
+                                                 We study real-time audio-responsive character
+arXiv:2605.28491v1 [cs.CV] 27 May 2026
+
+
+
+
+                                                 control as a deployment-faithful problem: strictly
+                                                 causal, bounded-latency streaming that must gen-
+                                                 erate coherent full-body motion at interactive
+                                                 frame rates while the audio condition can change
+                                                 abruptly (tempo shifts, drops, or user edits). Prior
+                                                 music-to-motion systems are largely optimized
+                                                 for offline generation with global context, and
+                                                 degrade in streaming rollouts where condition-
+                                                 ing history becomes stale or unreliable. We in-
+                                                 troduce DiscoForcing, a streaming audio-driven               Figure 1. We introduce DiscoForcing, a real-time, audio-
+                                                 diffusion framework that combines a causal mu-               responsive character control system. Given online streaming audio
+                                                 sic encoder that captures rhythmic structure and             inputs, DiscoForcing causally synthesizes continuous full-body
+                                                 phase dynamics with a diffusion-forcing sequence             motions in real time. The generated motion supports two de-
+                                                                                                              ployment settings: (i) avatar interactive control for responsive
+                                                 model trained under heterogeneous noise levels               animation and visualization, and (ii) physics-based humanoid plat-
+                                                 across the temporal horizon. Building on this, we            form by converting the predicted motion into executable humanoid
+                                                 design a hybrid temporal schedule and a history-             joint commands.
+                                                 guided streaming sampler to explicitly trade off
+                                                 responsiveness against long-horizon consistency
+                                                 under non-stationary audio. Implemented in an                that is simultaneously (i) responsive to newly arriving audio
+                                                 end-to-end real-time interactive system with on-             cues and user edits, (ii) temporally coherent over long roll-
+                                                 line avatar playback and humanoid deployment                 outs, and (iii) computationally feasible at interactive frame
+                                                 workflows, DiscoForcing delivers more stable                 rates under a strict per-frame budget. Beyond entertainment,
+                                                 long-horizon rollouts and sharper audio–motion               this problem provides a concrete and deployment-faithful
+                                                 alignment than prior baselines under matched                 testbed for studying streaming generative policies under
+                                                 causality and latency constraints while maintain-            causality and latency constraints, which aligns with the
+                                                 ing real-time throughput. Project Page: https:               broader goal of making generative sequence models usable
+                                                 //discoforcing.github.io/                                    in real interactive loops.
+                                                                                                              Despite rapid progress in music-to-motion generation, most
+                                                                                                              prior methods are developed and validated in an offline
+                                                                                                              regime. They commonly assume access to future audio
+                                         1. Introduction
+                                                                                                              context (Alexanderson et al., 2023; Li et al., 2021), rely on
+                                         Real-time audio-responsive character control is a core capa-         long temporal windows (Siyao et al., 2022), or perform non-
+                                         bility for interactive embodied applications, spanning virtual       causal inference that can revisit and refine past decisions (Li
+                                         reality avatars, animation-driven simulation, and physical           et al., 2024b). While these choices can improve offline met-
+                                         humanoid deployment. In these settings, a system must con-           rics on fixed clips, they do not translate cleanly to streaming
+                                         vert a live music stream into continuous full-body motion            deployment. When executed online with zero lookahead,
+                                             *                         1
+                                                                                                              models often exhibit delayed reactions (Xiao et al., 2025),
+                                            Equal   contribution         ShanghaiTech    University           weakened beat synchronization (Tseng et al., 2023), and ac-
+                                         2
+                                         InstAdapt.        Correspondence to:       Jingya Wang
+                                         <wangjingya@shanghaitech.edu.cn>.                                    cumulating artifacts in long-horizon rollouts (Holden et al.,
+                                                                                                              2017). Importantly, this mismatch is structural rather than
+                                         Preprint. May 28, 2026.                                              incidental: streaming execution changes the learning and
+
+                                                                                                          1
+         DiscoForcing: A Unified Framework for Real-Time Audio-Driven Character Control with Diffusion Forcing
+
+           Table 1. Comparative analysis of DiscoForcing versus existing audio-driven human motion synthesis approaches.
+
+  Method                                online system    long-horizon       music transition   physical platform    user-interactive
+  Bailando (Siyao et al., 2022)                                ✓
+  EDGE (Tseng et al., 2023)                                    ✓                   ✓
+  Lodge (Li et al., 2024b)                                     ✓
+  MEGADance (Yang et al., 2025a)                                                   ✓
+  FlowerDance (Yang et al., 2025b)                                                                                         ✓
+  DiscoForcing                                ✓                ✓                   ✓                   ✓                   ✓
+
+
+inference problem because the model must act causally on               at interactive rate. This formulation mirrors practical in-
+incomplete evidence, commit to outputs without revision,               teractive systems and enables principled, apples-to-apples
+and satisfy a hard real-time compute budget (Zhao et al.,              evaluation under matched constraints.
+2025).
+                                                                       Building on this formulation, we propose DiscoForcing, a
+Streaming audio-responsive control is challenging for three            streaming audio-driven diffusion framework that addresses
+intertwined reasons. First, causality and bounded latency              the stability–responsiveness trade-off in non-stationary roll-
+remove the anticipatory cues that offline systems exploit for          outs. DiscoForcing couples (i) a causal music encoder that
+beat alignment and phrase-level structure, making instan-              extracts rhythmic structure and phase dynamics from a slid-
+taneous synchronization substantially harder (Siyao et al.,            ing audio window with (ii) a diffusion-forcing sequence
+2022; Barquero et al., 2024). Second, music streams are                model trained with heterogeneous noise across time, improv-
+non-stationary: tempo shifts, drops, style switches, and user-         ing robustness to imperfect or stale autoregressive histories.
+driven edits can induce abrupt conditioning changes. Over-             During inference, we use a streaming sampler with hybrid
+trusting motion history improves smoothness but slows re-              temporal scheduling, where temporal guidance combines a
+action, whereas aggressively overriding history increases              stable history-based prediction with an audio-conditioned
+responsiveness but risks discontinuities and jitter (Fan et al.,       prediction that preserves recent context while discounting
+2025; Huang et al., 2024). Third, long-horizon streaming               distant history, thereby reducing lock-in to stale autoregres-
+amplifies error accumulation. Any small prediction error               sive states and improving responsiveness to incoming audio.
+contaminates the future conditioning history, inducing a
+                                                                       To close the evaluation gap, we also build an end-to-end real-
+train–test distribution shift that is exacerbated when the au-
+                                                                       time online verification system that runs the full loop under
+dio condition itself evolves over time (Xiao et al., 2025;
+                                                                       strict causality and low-latency constraints. The system en-
+Holden et al., 2017).
+                                                                       ables real-time, audio-driven full-body motion generation
+A central limitation of the current literature is the lack             from streaming audio inputs and supports two deployment
+of a deployment-faithful end-to-end system for audio-                  settings: (i) a user-facing avatar platform for responsive ani-
+responsive character control. Most prior work is presented             mation and interaction, and (ii) a physics-based humanoid
+as an offline generation model evaluated on fixed clips,               pipeline that executes the generated motion as joint-level
+rather than a real-time interactive stack that users can di-           control commands. This setup enforces matched causality
+rectly experience. In practical use, however, the model must           and latency budgets and supports both interactive demos
+run online: it must process streaming audio, produce motion            and embodied execution.
+continuously in real time, and commit to outputs without
+                                                                       Under streaming settings, DiscoForcing improves both of-
+retroactive revision (Dai et al., 2024). Without an integrated
+                                                                       fline metrics and online rollout behavior compared with
+system that couples perception/encoding, streaming genera-
+                                                                       strong autoregressive and diffusion baselines. In particu-
+tion, and online execution, it remains unclear how existing
+                                                                       lar, it yields better responsiveness to abrupt music changes
+models behave when placed in an actual interactive loop,
+                                                                       without sacrificing continuity, while maintaining real-time
+and what design choices are necessary to deliver stable and
+                                                                       throughput under strict per-frame computation budgets.
+responsive user-facing control.
+                                                                       These results indicate that diffusion-forcing models, when
+In this work, we study real-time audio-responsive character            paired with deployment-aware conditioning management
+control under explicit streaming constraints. We formulate             and streaming evaluation, offer a practical path toward ro-
+the task as bounded-latency streaming motion generation: at            bust audio-responsive character control in interactive appli-
+each time step, the model receives a causal music representa-          cations, as shown in Table 1.
+tion extracted from the live audio stream and a finite motion
+                                                                       Our contributions are threefold:
+history buffer, and then predicts the next short motion chunk
+
+
+                                                                   2
+          DiscoForcing: A Unified Framework for Real-Time Audio-Driven Character Control with Diffusion Forcing
+
+
+
+
+Figure 2. System Pipeline. DiscoForcing encodes live audio into a causal music feature (30 Hz) and generates continuous full-body
+motion via a diffusion-forcing transformer conditioned on the feature and a history buffer (30 Hz). The resulting motion is delivered
+to (i) an online avatar platform for retargeting and interactive Unity visualization, and (ii) a humanoid deployment stack that performs
+IK/interpolation and executes whole-body control with low-level PD tracking.
+
+
+   • We present DiscoForcing, to our knowledge, the first              beat timing and motion fidelity. Diffusion-based methods
+     end-to-end real-time audio-responsive character con-              improve coverage of complex choreography and stylistic
+     trol framework that integrates causal audio encoding              diversity (Alexanderson et al., 2023; Tseng et al., 2023; Li
+     with streaming dance generation.                                  et al., 2023), with further advances in structure and controlla-
+                                                                       bility via coarse-to-fine sampling (Lodge (Li et al., 2024b)),
+   • We propose a latent diffusion-forcing model with de-              bidirectional context (BADM (Zhang et al., 2024a)), and
+     composed music conditioning on rhythmic and peri-                 genre-aware experts (MEGADance (Yang et al., 2025a)).
+     odic features, and introduce a temporal-guided strategy           However, most approaches remain offline and non-causal,
+     to balance fast reaction with long-horizon stability.             relying on future audio or full-track access for global con-
+   • We build a reproducible communication-based interac-              sistency, which limits streaming use where the system must
+     tive system that enables real-time user interaction for           react causally to live audio and user edits under tight latency
+     both online avatar playback and a physics-based hu-               budgets.
+     manoid platform, supporting practical demonstrations
+     and cross-platform validation within a unified runtime.           Real-Time Interactive Character Control. Interactive
+                                                                       character control is a core problem in animation and physics-
+2. Related Works                                                       based simulation, enabling users to steer virtual agents
+                                                                       in a responsive and physically plausible way. Early ap-
+Audio-Driven Human Motion Synthesis. Human mo-                         proaches such as DeepPhase (Starke et al., 2022) and
+tion synthesis has rapidly advanced with deep generative               PFNN (Holden et al., 2017) rely on low-dimensional con-
+models that support rich conditioning signals, from action             trols (e.g., heading direction, speed, simple style flags) to
+labels (Guo et al., 2020; Petrovich et al., 2021), text descrip-       drive motion generation, yielding smooth locomotion but
+tions (Tevet et al., 2023; Chen et al., 2023; Zhang et al.,            limited expressivity. Later methods like PADL (Juravsky
+2023; Jiang et al., 2023; Wang et al., 2025; Liu et al., 2025b)        et al., 2022) and AnySkill (Cui et al., 2024) use natural lan-
+and various interactions (Ji et al., 2025; Tang et al., 2024;          guage as the control interface, formulating character control
+Deng et al., 2026) to audio. Audio-driven generation intro-            as language-conditioned motion generation. Building on
+duces a distinctive synchronization challenge: the model               this, CAMDM (Chen et al., 2024b), DART (Zhao et al.,
+must align kinematic events to fine-grained rhythm while               2025) and FloodDiffusion (Cai et al., 2025) employ autore-
+preserving coherent, natural full-body dynamics over long              gressive diffusion models for text-driven motion synthesis,
+horizons. Early systems such as FACT (Li et al., 2021) and             producing long-horizon motions with richer multimodality
+Bailando (Siyao et al., 2022) use autoregressive transform-            and temporal coherence. In parallel, CLoSD (Tevet et al.,
+ers, but often accumulate errors in long rollouts, degrading           2025) explicitly closes the loop between motion generation
+
+                                                                   3
+         DiscoForcing: A Unified Framework for Real-Time Audio-Driven Character Control with Diffusion Forcing
+
+and simulation to enforce physical feasibility, while recent         3.1. Causal Music Processing
+work such as Diffuse-CLoC (Huang et al., 2025b) and Uni-
+                                                                     Decomposed Music Conditioning. To support strictly
+Phys (Wu et al., 2025) jointly models state and action distri-
+                                                                     streaming control without lookahead, we introduce a causal
+butions to more tightly couple generative priors with control
+                                                                     music encoding pipeline that extracts a compact feature
+dynamics. However, audio-driven real-time interactive char-
+                                                                     ct from a fixed-length sliding audio buffer at each step t.
+acter control remains largely unexplored: music is highly
+                                                                     This enables the motion generator to respond immediately
+non-stationary and diverse in rhythm and style, and existing
+                                                                     to newly arriving musical cues and user edits. Concretely,
+systems rarely support a user-facing, real-time interaction
+                                                                     we adopt a Vector-Quantized Periodic Autoencoder (VQ-
+and validation platform for evaluating control quality from
+                                                                     PAE) (Starke et al., 2022; Li et al., 2024a) to factorize music
+the end-user’s perspective.
+                                                                     conditioning into discrete rhythmic tokens and continuous
+                                                                     phase-alignment dynamics, producing an embedding that is
+                                                                     simultaneously beat-aware and temporally smooth—well-
+Diffusion Models for Sequence Modeling. Diffusion                    suited for low-latency, online motion synthesis. At stream-
+probabilistic models (Sohl-Dickstein et al., 2015; Ho et al.,        ing step t, our generator is conditioned on a causal music
+2020) invert a progressive noising process and have become           feature
+dominant in image generation (Dhariwal & Nichol, 2021;
+                                                                                            ct = [ftvq ; ftpae ],                (1)
+Saharia et al., 2022; Rombach et al., 2022), motivating adap-
+tations to sequential domains. A common approach is full-            which is extracted from a fixed-length sliding audio win-
+sequence denoising, jointly refining all timesteps (Ho et al.,       dow. The feature combines (i) a discrete rhythmic code via
+2022; Janner et al., 2022; Song et al., 2023; Gupta et al.,          residual vector quantization and (ii) a continuous periodic
+2024). While effective for fixed-length synthesis, such non-         alignment feature parameterized in the frequency domain.
+causal formulations are ill-suited to variable-length or low-
+latency streaming, where outputs must be emitted incremen-           Discrete Rhythmic Encoding. Let wt be the waveform
+tally. Several works combine diffusion with autoregressive           segment in the sliding buffer at step t. We compute a shared
+factorization for incremental generation (Rasul et al., 2021;        causal latent using a dilated 1D convolutional encoder:
+Wu et al., 2023; Kim et al., 2024; Ruhe et al., 2024), but
+naive AR execution can reintroduce exposure bias and com-                              f causal = Conv1D(wt ),                  (2)
+pounding errors through history. Diffusion Forcing (Chen
+et al., 2024a) addresses this by training with token-wise het-       where the dilation schedule is chosen to capture multi-scale
+erogeneous noise, improving robustness to imperfect histo-           temporal patterns while preserving causality. Then we feed
+ries. Follow-ups refine conditioning management: History-            the shared latent into a residual vector quantizer (RVQ) (Van
+Guided Diffusion (Song et al., 2025) stabilizes coherence            Den Oord et al., 2017; Lee et al., 2022):
+with corrupted history, Self Forcing (Huang et al., 2025a)
+                                                                                    f vq = RVQ FFNvq (f causal ) .
+                                                                                                                
+reduces train–test mismatch via self-generated history, and                                                                     (3)
+Rolling Forcing (Liu et al., 2025a) targets real-time gener-
+                                                                     This branch captures discrete rhythmic patterns and high-
+ation with rolling-window denoising. Nevertheless, most
+                                                                     level musical structure that are useful for motion triggering
+streaming diffusion systems assume static or slowly varying
+                                                                     and style consistency.
+global conditions, and do not directly address interactive
+control with non-stationary signals such as streaming music,         Periodic Alignment Encoding. To obtain a smooth tempo-
+which requires balancing continuity and responsiveness.              ral alignment signal, we estimate frequency-domain param-
+                                                                     eters and predict the phase by a lightweight network using
+3. Methods                                                           Fast Fourier Transformation (FFT) (Starke et al., 2022; Li
+                                                                     et al., 2024a):
+As shown in Fig. 2, our method is organized around three
+                                                                     [A, B, F] = FFT(f causal ), ϕ = tan−1 FCphase (f causal ) .
+                                                                                                                              
+tightly coupled components for deployment-faithful stream-
+ing control: (i) Causal Music Processing that converts live                                                                   (4)
+audio into synchronized, strictly causal conditioning fea-           We reconstruct a periodic alignment feature in the time
+tures; (ii) a Streaming Audio-driven Motion Diffusion                domain as:
+model that performs bounded-latency, autoregressive diffu-
+                                                                               f pae (t) = A · sin 2π(F · t − ϕ) + B,
+                                                                                                                
+sion generation over motion tokens/frames while remaining                                                                       (5)
+robust to imperfect histories; and (iii) a Real-time Interac-
+tive System that connects audio ingestion, online sampling,          where t denotes time within the window. Intuitively, ϕ
+and avatar/robot playback in a closed timing loop with ex-           controls the alignment (phase), while A and B control am-
+plicit latency budgets.                                              plitude and offset for smooth transitions.
+
+                                                                 4
+         DiscoForcing: A Unified Framework for Real-Time Audio-Driven Character Control with Diffusion Forcing
+
+3.2. Streaming Audio-driven Motion Diffusion                          Our VAE is trained with an ℓ2 reconstruction loss to preserve
+                                                                      motion fidelity and a Kullback-Leibler (KL) divergence loss
+We formulate real-time, audio-responsive interactive char-
+                                                                      to regularize the latent space towards a standard Gaussian
+acter control as a streaming motion generation problem. At
+                                                                      prior:
+the current time step t, our goal is to model the conditional
+distribution over the next n motion frames, mt:t+n−1 , given                    LVAE = ∥mT − m̂T ∥22
+a historical motion buffer mt−h:t−1 and the synchronized                                                                            (8)
+music context ct .                                                                     + λDKL q(zT |mT ) ∥ N (0, I) ,
+
+Streaming Motion Representation. Prior dance gener-                   where λ is a weighting coefficient.
+ation methods (Tseng et al., 2023; Li et al., 2024b) often
+model motion in global, non-canonical coordinates. In au-             Latent Diffusion Forcing. To enable streaming genera-
+toregressive (AR) rollouts, global-frame error accumulation           tion with flexible temporal control, we adapt the diffusion
+shifts the conditioning distribution, degrading long-horizon          forcing framework (Chen et al., 2024a) to our latent se-
+stability (e.g., drift and jitter). We thus adopt a canonical-        quence modeling. We define a probability path specific to
+ized incremental representation that expresses dynamics in            each temporal sequence index t that transitions from clean
+the root frame with velocity-like increments, yielding more           data x0t ≡ zt ∼ qdata to pure noise x1t ∼ N (0, I) over a
+stationary AR conditioning.                                           diffusion horizon kt ∈ [0, 1]:
+Many streaming generators (Tevet et al., 2025; Chen et al.,
+2024b) use the 263-D HumanML3D (Guo et al., 2022) fea-                            p(xkt t | x0t ) = N (xkt t ; αkt x0t , σk2t I),    (9)
+ture, which recovers joint positions but not the joint ro-
+tations needed for real-time retargeting, requiring costly            where αkt and σkt are predefined noise schedules satis-
+post-processing (Bogo et al., 2016). To remove this bottle-           fying the boundary conditions: α0 = 1, σ0 = 0 and
+neck, we follow (Xiao et al., 2025) and encode each frame             α1 = 0, σ1 = 1. This formulation allows each token at
+as a 272-D vector:                                                    sequence position t to undergo denoising at an independent
+                                                                      noise level determined by kt . To reverse this process, based
+         mt = ṙtx , ṙtz , ṙta , jpt , jvt , jrt ∈ R272 ,
+               
+                                                            (6)       on the flow-based paradigm (Lipman et al., 2023; Li & He,
+                                                                      2025), we train a network vθ (xkTT , kT , c) to predict the con-
+where ṙtx , ṙtz ∈ R are root XZ-plane linear velocities,            ditional vector field vT . Each component vt of this field
+ṙta ∈ R6 is the 6D root angular velocity (Zhou et al., 2019),        corresponds to the instantaneous velocity of the probability
+and jpt ∈ R3K , jvt ∈ R3K , jrt ∈ R6K are local joint po-             flow with respect to the diffusion time:
+sitions, velocities, and rotations in the root frame. For
+SMPL (Loper et al., 2015), K = 22. This enables direct                                     vt = α̇kt x0t + σ̇kt ϵt ,                (10)
+real-time reconstruction via forward kinematics, making
+AR streaming outputs immediately usable for low-latency               where α̇kt and σ̇kt denote the derivatives of the schedule
+retargeting without per-frame fitting.                                coefficients with respect to kt , and ϵt ∼ N (0, I). The train-
+                                                                      ing objective minimizes the flow matching loss, computed
+Motion Primitive Learning. Given the strict low-latency               selectively on noised tokens:
+requirements of streaming audio-driven motion generation,                                   h                             i
+directly modeling high-dimensional raw motion dynamics                    LDF =       E       ∥vθ (xkTT , kT , c) − vT ∥2K ,    (11)
+                                                                                  kT ,zT ,ϵT
+is computationally prohibitive. To address this, we em-
+ploy a motion Variational Autoencoder (VAE) (Kingma &
+                                                                      where the norm ∥ · ∥K (defined as ∥u∥2K = t:kt >0 ∥ut ∥2 )
+                                                                                                                 P
+Welling, 2014) to project the motion stream into a compact
+                                                                      serves as a masking mechanism. Since tokens with kt = 0
+latent manifold, aligned with prior frameworks (Chen et al.,
+                                                                      remain in the clean state and do not require denoising, this
+2023; Zhao et al., 2025). This strategy not only reduces the
+                                                                      mask ensures the model focuses exclusively on learning the
+computational burden for the autoregressive backbone but
+                                                                      active transport dynamics.
+also acts as an implicit low-pass filter, effectively removing
+high-frequency sensor jitter. Formally, let T = {1, . . . , T }
+denote the indices of the full motion sequence. The VAE               Hybrid Temporal Schedule. Distinct from vanilla Diffu-
+consists of an encoder E and a decoder D, which map the               sion Forcing which relies solely on random noise schedules,
+processed motion stream mT ∈ RT ×272 to a latent se-                  we employ a hybrid strategy to bridge the gap between train-
+quence zT ∈ RT ×Dz and back to an approximation m̂T ,                 ing and streaming inference, while also encouraging consis-
+respectively:                                                         tent denoising patterns. At each iteration, we stochastically
+                                                                      sample a noise schedule type from a categorical distribution
+             zT = E(mT ),       m̂T = D(zT ).              (7)        defined over three variants:
+
+                                                                  5
+         DiscoForcing: A Unified Framework for Real-Time Audio-Driven Character Control with Diffusion Forcing
+
+1) Random Schedule: ktrand ∼ U(0, 1). This independent                 Algorithm 1 Streaming Inference with Temporal Guidance
+sampling ensures the model retains the flexibility to handle             Input: Audio stream c, Model vθ , Max length T , Win-
+arbitrary noise states.                                                  dow size l, Guidance scale ω, Schedule params lctx , lhist .
+2) Monotonic Schedule. Motivated by (Zhang et al., 2024b;                Initialize: Latent buffer x̂ = ∅, Global step τ ← 0,
+Liu et al., 2025a), we define a schedule based on a randomly             Solver step δ ← 1/l.
+sampled current time step τ ∈ [0, T ] and a window size l:                          ▷ ensures one denoising step per output token
+                                                                       while streaming do
+              mono             t − (τ − l)                                 τ ← τ + 1.
+             kt    = clamp                 , 0, 1 .      (12)
+                                    l                                      x̂ ← [x̂, ϵ], where ϵ ∼ N (0, I).
+                                                                           x̂ ← x̂[−T :].                               ▷ maintain the buffer
+Under this schedule, frames before τ − l are clean (kt = 0),
+                                                                           Define active window W ← {τ − l + 1, . . . , τ }.
+frames after τ are pure noise (kt = 1), and the intermediate
+                                                                           Define history indices H ← {indices before W}.
+window transitions linearly.
+                                                                           ktmono ← Φmono (t, τ, l) for t ∈ W.
+3) Trapezoid Schedule. Following (Chen et al., 2024a;                      kttrap ← Φtrap (t, τ, l, lctx , lhist ) for all t.
+Song et al., 2025), we further introduce a trapezoidal noise                                                        ▷ construct the schedule
+profile that assigns higher noise levels to tokens significantly           x̂trap ← x̂; Sample ϵ′ ∼ N (0, I).
+preceding the current time step τ :                                        x̂trap        trap
+                                                                             H ← α(kH ) ⊙ x̂H + σ(kH ) ⊙ ϵH .
+                                                                                                                   trap       ′
+
+                                                                                  ▷ here ⊙ denotes element-wise multiplication
+                            (τ − lctx − l) − t
+            hist
+          kt =clamp                               , 0, 1 ,                 vcond ← vθ (x̂trap , k trap , c).
+                                   lhist                    (13)           vhist ← vθ (x̂, k mono , ∅).
+                  kttrap = max(kthist , ktmono ).                          v ← vhist + ω(vcond − vhist ).               ▷ temporal guidance
+                                                                           x̂W ← x̂W − vW · δ.                         ▷ denoise the window
+Here, lctx denotes the length of the clean context window and
+                                                                           Emit token x̂τ −l+1 as output ẑ.
+lhist > 0 determines the rate at which noise levels increase
+                                                                         end while
+for the distant past.
+
+Streaming Inference with Temporal Guidance. We per-                    user-facing animation interaction and (ii) a physics-based
+form bounded-latency streaming generation by maintain-                 humanoid deployment pipeline targeting the Unitree G1
+ing a fixed-length FIFO denoising window of size l at the              humanoid robot for embodied execution. The streaming
+tail of the sequence (Kim et al., 2024), and apply hybrid              generator communicates with both Unity and the G1 robot
+noise schedule as temporal guidance to denoise all tokens              exclusively via ROS2.
+in the window jointly (Alg. 1). Once the leftmost token in
+the window reaches the clean state, we emit it as the next
+                                                                       Online Avatar Platform. We implement an interactive
+streaming output token, then shift the buffer by one position
+                                                                       animation and visualization platform in Unity, where virtual
+and append a new token initialized as pure Gaussian noise,
+                                                                       characters are controlled using SMPL parameters (Loper
+continuing the streaming process.
+                                                                       et al., 2015). The streaming generator transmits real-time
+Inspired by (Ho & Salimans, 2021; Song et al., 2025), we               motion data to Unity through ROS2, enabling the characters
+employ temporal guidance to mitigate long-term motion                  to perform synchronized movements with the input music.
+drift. By corrupting the distant history with a trapezoid noise        This setup allows for live, user-facing evaluation of the
+schedule, we implicitly filter out high-frequency priors that          generated motions under realistic streaming conditions.
+may contradict current control signals. The guided velocity
+is then computed as a weighted sum with scale ω:                       Physics-Based Humanoid Platform. We further vali-
+                    mono
+                   kT                                                  date the streaming generator on a physical humanoid robot.
+  vTguided = vθ (x̂T       , kTmono , ∅)                               SMPL-format motions produced by the streaming generator
+                        trap
+                       kT                  kmono                       are first retargeted to the Unitree G1 using GMR (Araujo
+          + ω[vθ (x̂T , kTtrap , c) − vθ (x̂TT , kTmono , ∅)].
+                                                            (14)       et al., 2025). The resulting reference trajectories are sub-
+                                                                       sequently tracked by a whole-body control (WBC) policy
+                                                                       trained on large-scale motion datasets in simulation (Liao
+3.3. Real-Time Interactive System
+                                                                       et al., 2025; Mahmood et al., 2019; Punnakkal et al., 2021).
+To validate our streaming formulation beyond offline met-              To ensure temporal alignment, the retargeted motion se-
+rics, we build an end-to-end real-time interactive system              quences are interpolated to match the tracker’s 50Hz control
+that supports both virtual and physical deployment. As il-             frequency. All of these steps are performed in real time, en-
+lustrated in Fig. 2, the system exposes two application front-         abling the robot to dynamically adapt its dance movements
+ends: (i) an online avatar interaction platform in Unity for           in response to continuously changing music.
+
+                                                                   6
+             DiscoForcing: A Unified Framework for Real-Time Audio-Driven Character Control with Diffusion Forcing
+
+
+
+
+Figure 3. Demonstration of Our Method. In a strictly causal, bounded-latency online streaming rollout, DiscoForcing keeps the character
+stationary during silent segments (mute), and immediately generates beat-synchronized full-body dance once music resumes. As the
+input stream undergoes multiple music transitions, our model adapts in real time to the changing audio while maintaining long-horizon
+temporal coherence and smooth motion continuity.
+
+
+Table 2. Quantitative comparison on FineDance (Li et al., 2023)                    hours of motion sequences reconstructed from multi-view
+dataset. GT stands for ground truth, A higher or lower value is
+better for ↑ or ↓, and → means the value closer to ground truth is
+                                                                                   videos at 60 FPS. For both datasets, we strictly follow the
+better.                                                                            official data split for fair comparison and cut all examples
+                                                                                   to 30 FPS.
+                 FIDk ↓       FIDg ↓       FSR↓     Divk →   Divg →   BAS↑
+
+  GT               –            –          0.062     9.94     7.54     0.201       Evaluation Metrics. Following established proto-
+  FACT           113.38       97.05        0.284     3.36     6.37     0.183       cols (Yang et al., 2025a; Li et al., 2024b; Tseng et al.,
+  Bailando        82.81       28.17        0.188     7.74     6.25     0.202       2023), we evaluate: 1) Motion Quality (realism and
+  EDGE           94.34        50.38        0.200     8.13     6.45     0.212       physical plausibility), 2) Motion Diversity (variety and
+  Lodge           50.00       35.52        0.028     5.67     4.96     0.226
+  MEGA           50.00        13.02        0.243     6.23     6.27     0.226
+                                                                                   non-repetitiveness), and 3) Music–Dance Correlation
+                                                                                   (rhythmic synchronization). For Motion Quality, we use
+  DiscoForcing    23.84        8.62        0.142     5.98     5.99     0.225
+                                                                                   Fréchet Inception Distance (FID) (Heusel et al., 2017) to
+                                                                                   measure distributional similarity between generated and
+    Table 3. Comparison on AIST++ (Li et al., 2021) dataset.                       real motions. Following (Li et al., 2021), we report FIDk
+                                                                                   and FIDg on kinetic and geometric features, capturing
+                    FIDk ↓          FIDg ↓     Divk → Divg →          BAS↑
+                                                                                   physical smoothness and choreographic quality. We also
+  Ground Truth            -            -           8.19      7.45     0.237        adopt FSR (Li et al., 2024b) to penalize foot-skating via
+                                                                                   consistency between center-of-mass acceleration and foot
+  FACT                 35.35        22.11          5.94      6.18     0.221
+                                                                                   velocity. For Motion Diversity, we compute the average
+  Bailando             28.16        9.62           7.83      6.34     0.233        pairwise Euclidean distance of generated motion features
+  EDGE                 42.16        22.12          3.96      4.61     0.233        and report Divk and Divg in the kinetic and geometric
+  Lodge                37.09        18.79          5.58      4.85     0.242        spaces (Siyao et al., 2022). For Music–Dance Correlation,
+  MEGA                 25.89        12.62          5.84      6.23     0.238        we use Beat Alignment Score (BAS) (Li et al., 2021) to
+                                                                                   quantify alignment between kinematic motion beats and
+  DiscoForcing         18.87        11.57          6.76      6.31     0.244
+                                                                                   musical audio beats.
+
+4. Experiments                                                                     4.2. Music-to-Dance Evaluation
+                                                                                   Baselines. We compare our method against several rep-
+4.1. Experimental Setup
+                                                                                   resentative music-to-dance approaches: FACT (Li et al.,
+Datasets. To validate our method, we utilize two public                            2021), an autoregressive cross-modal transformer; Bai-
+dance datasets that provide 3D dance motions synchronized                          lando (Siyao et al., 2022), a VQ-VAE with actor–critic GPT
+with accompanying music: FineDance (Li et al., 2023) and                           framework; EDGE (Tseng et al., 2023), a diffusion trans-
+AIST++ (Li et al., 2021). FineDance stands as the largest                          former conditioned on Jukebox audio features; Lodge (Li
+publicly available dataset to date, providing 7.7 hours of                         et al., 2024b), a coarse-to-fine diffusion model with prim-
+music-paired optical motion capture data at 30 FPS. AIST++                         itive generation and refinement; and MEGADance (Yang
+serves as a widely used standard benchmark, providing 5.2                          et al., 2025a), a Mixture-of-Experts Mamba–Transformer
+
+                                                                               7
+          DiscoForcing: A Unified Framework for Real-Time Audio-Driven Character Control with Diffusion Forcing
+
+Table 4. Ablation studies of music-to-dance generation on AIST++ (Li et al., 2021) dataset, where underlined denotes the design we
+choose.
+
+
+                                                  Motion Quality            Motion Diversity                  Latency
+           Class               Settings                                                           BAS↑
+                                            FIDk ↓    FIDg ↓      FSR↓      Divk →     Divg →              (ms / frame)
+                   Ground Truth               –          –        0.007      8.19       7.45      0.237          –
+                               151d         27.83     15.78       0.201      5.57       6.62      0.233        25.65
+           Representation      263d         26.47      8.30       0.060      8.53       7.62      0.245        26.60
+                               272d         25.49     13.30       0.115     10.37       7.66      0.247        26.68
+                               Librosa      25.49     13.30       0.115     10.37       7.66      0.247        26.68
+           Music Encoder
+                               VQ-PAE       23.23     12.28       0.097     6.50        6.68      0.238        26.73
+                               CFG          23.23     12.28       0.097      6.50       6.68      0.238        26.73
+           Guidance
+                               TG           18.87     11.57       0.059      6.76       6.31      0.244        26.26
+                               5            28.63     12.23       0.062      5.41       5.85      0.242        14.02
+           Time-steps          10           18.87     11.57       0.059      6.76       6.31      0.244       26.26
+                               100          17.58     11.29       0.080      8.99       6.86      0.248       261.91
+                   DiscoForcing             18.87     11.57       0.059      6.76       6.31      0.244        26.26
+
+
+
+hybrid.                                                               ral Guidance (TG) outperforms Classifier-Free Guidance
+                                                                      (CFG) by suppressing autoregressive drift and improving
+                                                                      synchronization. For compute, 10 denoising steps are op-
+Comparisons. As summarized in Table 2 and Table 3,
+                                                                      timal: 100 steps brings diminishing gains while exceeding
+DiscoForcing achieves the best overall motion quality on
+                                                                      real-time limits, and 5 steps harms plausibility. We therefore
+FineDance, with substantially lower FIDk and FIDg than all
+                                                                      adopt 10-step denoising to sustain stable 30 FPS throughput.
+baselines while keeping competitive BAS and diversity; on
+AIST++, DiscoForcing further improves kinetic FIDk over
+strong diffusion and MoE baselines, indicating better rollout         5. Conclusion
+stability. Notably, methods optimized for offline/global-
+                                                                      We present DiscoForcing, a novel streaming framework for
+context generation may achieve strong alignment or specific
+                                                                      audio-driven interactive character control that operates un-
+sub-metrics, but DiscoForcing provides a more balanced
+                                                                      der strict causality and low-latency constraints. The core
+trade-off between long-horizon coherence and responsive-
+                                                                      contribution is an autoregressive diffusion forcing genera-
+ness in a deployment-faithful setting.
+                                                                      tor that conditions on a short motion history and synchro-
+                                                                      nized causal music features, enabling long-horizon, real-
+4.3. Ablation Study                                                   time motion synthesis without requiring future context or
+Motion Representation. As shown in Table 4, we compare                offline planning. We further describe a practical end-to-
+our 272-dim representation with the 263-dim HumanML3D                 end system pipeline that supports both online avatar visual-
+format and a 151-dim baseline. While 263-dim offers slight            ization and humanoid deployment via standard retargeting
+geometric gains, it lacks rotations and requires costly inverse       and tracking control. Experiments demonstrate that our ap-
+kinematics, violating real-time constraints. Our 272-dim              proach improves motion quality and temporal consistency
+design best balances quality and deployability, improving             under streaming rollouts, while remaining responsive to
+fidelity and beat alignment over 151-dim while enabling               time-varying audio conditions such as rhythm changes and
+low-latency forward-kinematics reconstruction.                        abrupt transitions. We hope this work serves as a step to-
+                                                                      ward deployment-faithful generative sequence modeling for
+Music Encoder. Hand-crafted Librosa (McFee et al., 2015)              interactive embodied applications, and we expect future
+features yield marginally better beat alignment due to ex-            work to explore stronger robustness under distribution shift,
+plicit onset cues, but our learned VQ-PAE substantially               richer user control signals, stronger physical feasibility con-
+improves realism. This indicates rule-based descriptors               straints, broader real-world testing, and tighter integration
+capture low-level pulses, whereas VQ-PAE encodes richer               with downstream controllers for safer and more reliable
+stylistic and semantic cues for natural control.                      deployment.
+Sampling Strategy. We ablate inference settings. Tempo-
+
+                                                                  8
+         DiscoForcing: A Unified Framework for Real-Time Audio-Driven Character Control with Diffusion Forcing
+
+Acknowledgements                                                       for interactive agents. In Proceedings of the IEEE/CVF
+                                                                       conference on computer vision and pattern recognition,
+This work was supported by National Natural Science Foun-              pp. 852–862, 2024.
+dation of China (62406195, 62303319), Shanghai Local Col-
+lege Capacity Building Program (23010503100), HPC Plat-              Dai, W., Chen, L.-H., Wang, J., Liu, J., Dai, B., and Tang,
+form of ShanghaiTech University, Core Facility Platform               Y. Motionlcm: Real-time controllable motion generation
+of Computer Science and Communication of ShanghaiTech                  via latent consistency model. In European Conference on
+University, and MoE Key Laboratory of Intelligent Per-                 Computer Vision, pp. 390–408. Springer, 2024.
+ception and Human-Machine Collaboration (ShanghaiTech
+                                                                     Deng, Z., Shi, Y., Ji, K., Xu, L., Huang, S., and Wang,
+University), and Shanghai Engineering Research Center of
+                                                                       J. Human-object interaction via automatically designed
+Intelligent Vision and Imaging.
+                                                                       VLM-guided motion policy. In The Fourteenth Interna-
+                                                                       tional Conference on Learning Representations, 2026.
+References
+                                                                     Dhariwal, P. and Nichol, A. Diffusion models beat gans
+Alexanderson, S., Nagy, R., Beskow, J., and Henter, G. E.              on image synthesis. Advances in neural information
+  Listen, denoise, action! audio-driven motion synthesis               processing systems, 34:8780–8794, 2021.
+  with diffusion models. ACM Transactions on Graphics
+  (TOG), 42(4):1–20, 2023.                                           Fan, C., Guan, J., Zhao, X., Xu, D., Lin, Y., Ye, T., Feng,
+                                                                       P., and Pan, H. Align your rhythm: Generating highly
+Araujo, J. P., Ze, Y., Xu, P., Wu, J., and Liu, C. K. Retar-           aligned dance poses with gating-enhanced rhythm-aware
+  geting matters: General motion retargeting for humanoid              feature representation. arXiv preprint arXiv:2503.17340,
+  motion tracking. arXiv preprint arXiv:2510.02252, 2025.              2025.
+Barquero, G., Escalera, S., and Palmero, C. Seamless human           Guo, C., Zuo, X., Wang, S., Zou, S., Sun, Q., Deng, A.,
+  motion composition with blended positional encodings.                Gong, M., and Cheng, L. Action2motion: Conditioned
+  In Proceedings of the IEEE/CVF Conference on Com-                    generation of 3d human motions. In Proceedings of the
+  puter Vision and Pattern Recognition, pp. 457–469, 2024.            28th ACM international conference on multimedia, pp.
+                                                                       2021–2029, 2020.
+Bogo, F., Kanazawa, A., Lassner, C., Gehler, P., Romero,
+  J., and Black, M. J. Keep it smpl: Automatic estimation            Guo, C., Zou, S., Zuo, X., Wang, S., Ji, W., Li, X., and
+  of 3d human pose and shape from a single image. In                   Cheng, L. Generating diverse and natural 3d human
+  European conference on computer vision, pp. 561–578.                 motions from text. In Proceedings of the IEEE/CVF
+  Springer, 2016.                                                      conference on computer vision and pattern recognition,
+                                                                       pp. 5152–5161, 2022.
+Cai, Y., Wu, Y., Li, K., Zhou, Y., Zheng, B., and Liu, H.
+  Flooddiffusion: Tailored diffusion forcing for streaming           Gupta, A., Yu, L., Sohn, K., Gu, X., Hahn, M., Li, F.-
+  motion generation. arXiv preprint arXiv:2512.03520,                  F., Essa, I., Jiang, L., and Lezama, J. Photorealistic
+  2025.                                                               video generation with diffusion models. In European
+                                                                      Conference on Computer Vision, pp. 393–411. Springer,
+Chen, B., Martı́ Monsó, D., Du, Y., Simchowitz, M.,
+                                                                       2024.
+  Tedrake, R., and Sitzmann, V. Diffusion forcing: Next-
+  token prediction meets full-sequence diffusion. Advances           Heusel, M., Ramsauer, H., Unterthiner, T., Nessler, B., and
+  in Neural Information Processing Systems, 37:24081–                  Hochreiter, S. Gans trained by a two time-scale update
+  24125, 2024a.                                                        rule converge to a local nash equilibrium. Advances in
+                                                                       neural information processing systems, 30, 2017.
+Chen, R., Shi, M., Huang, S., Tan, P., Komura, T., and Chen,
+  X. Taming diffusion probabilistic models for character             Ho, J. and Salimans, T. Classifier-free diffusion guidance.
+  control. In ACM SIGGRAPH 2024 Conference Papers,                     In NeurIPS 2021 Workshop on Deep Generative Models
+  pp. 1–10, 2024b.                                                     and Downstream Applications, 2021.
+Chen, X., Jiang, B., Liu, W., Huang, Z., Fu, B., Chen, T., and       Ho, J., Jain, A., and Abbeel, P. Denoising diffusion proba-
+  Yu, G. Executing your commands via motion diffusion in               bilistic models. Advances in neural information process-
+  latent space. In Proceedings of the IEEE/CVF conference              ing systems, 33:6840–6851, 2020.
+  on computer vision and pattern recognition, pp. 18000–
+  18010, 2023.                                                       Ho, J., Salimans, T., Gritsenko, A., Chan, W., Norouzi, M.,
+                                                                       and Fleet, D. J. Video diffusion models. Advances in
+Cui, J., Liu, T., Liu, N., Yang, Y., Zhu, Y., and Huang,               neural information processing systems, 35:8633–8646,
+  S. Anyskill: Learning open-vocabulary physical skill                 2022.
+
+                                                                 9
+         DiscoForcing: A Unified Framework for Real-Time Audio-Driven Character Control with Diffusion Forcing
+
+Holden, D., Komura, T., and Saito, J. Phase-functioned               Li, R., Yang, S., Ross, D. A., and Kanazawa, A. Ai chore-
+  neural networks for character control. ACM Transactions              ographer: Music conditioned 3d dance generation with
+  on Graphics (TOG), 36(4):1–13, 2017.                                 aist++. In Proceedings of the IEEE/CVF international
+                                                                       conference on computer vision, pp. 13401–13412, 2021.
+Huang, X., Li, Z., He, G., Zhou, M., and Shechtman, E.
+  Self forcing: Bridging the train-test gap in autoregressive        Li, R., Zhao, J., Zhang, Y., Su, M., Ren, Z., Zhang, H., Tang,
+ video diffusion. In The Thirty-ninth Annual Conference                Y., and Li, X. Finedance: A fine-grained choreography
+  on Neural Information Processing Systems, 2025a.                      dataset for 3d full body dance generation. In Proceedings
+                                                                        of the IEEE/CVF International Conference on Computer
+Huang, X., Truong, T., Zhang, Y., Yu, F., Sleiman, J. P.,              Vision, pp. 10234–10243, 2023.
+  Hodgins, J., Sreenath, K., and Farshidian, F. Diffuse-cloc:
+  Guided diffusion for physics-based character look-ahead            Li, R., Zhang, Y., Zhang, Y., Zhang, H., Guo, J., Zhang,
+  control. ACM Transactions on Graphics (TOG), 44(4):                  Y., Liu, Y., and Li, X. Lodge: A coarse to fine diffu-
+ 1–12, 2025b.                                                          sion network for long dance generation guided by the
+                                                                       characteristic dance primitives. In Proceedings of the
+Huang, Z., Xu, X., Xu, C., Zhang, H., Zheng, C., Qin, J.,              IEEE/CVF Conference on Computer Vision and Pattern
+  and He, S. Beat-it: Beat-synchronized multi-condition 3d             Recognition, pp. 1524–1534, 2024b.
+  dance generation. In European conference on computer
+  vision, pp. 273–290. Springer, 2024.                               Li, T. and He, K. Back to basics: Let denoising generative
+                                                                       models denoise. arXiv preprint arXiv:2511.13720, 2025.
+Janner, M., Du, Y., Tenenbaum, J., and Levine, S. Planning
+  with diffusion for flexible behavior synthesis. In Interna-        Liao, Q., Truong, T. E., Huang, X., Gao, Y., Tevet, G.,
+  tional Conference on Machine Learning, pp. 9902–9915.                Sreenath, K., and Liu, C. K. Beyondmimic: From mo-
+  PMLR, 2022.                                                          tion tracking to versatile humanoid control via guided
+                                                                       diffusion. arXiv preprint arXiv:2508.08241, 2025.
+Ji, K., Shi, Y., Jin, Z., Chen, K., Xu, L., Ma, Y., Yu, J.,
+                                                                     Lipman, Y., Chen, R. T., Ben-Hamu, H., Nickel, M., and
+   and Wang, J. Towards immersive human-x interaction:
+                                                                       Le, M. Flow matching for generative modeling. In The
+   A real-time framework for physically plausible motion
+                                                                       Eleventh International Conference on Learning Repre-
+   synthesis. In Proceedings of the IEEE/CVF International
+                                                                       sentations, 2023.
+   Conference on Computer Vision, pp. 10173–10183, 2025.
+                                                                     Liu, K., Hu, W., Xu, J., Shan, Y., and Lu, S. Rolling forcing:
+Jiang, B., Chen, X., Liu, W., Yu, J., Yu, G., and Chen,
+                                                                       Autoregressive long video diffusion in real time. arXiv
+   T. Motiongpt: Human motion as a foreign language.
+                                                                       preprint arXiv:2509.25161, 2025a.
+   Advances in Neural Information Processing Systems, 36:
+   20067–20079, 2023.                                                Liu, Z., Ji, K., Yang, K., Yu, J., Shi, Y., and Wang, J. Com-
+                                                                       manding humanoid by free-form language: A large lan-
+Juravsky, J., Guo, Y., Fidler, S., and Peng, X. B. Padl:               guage action model with unified motion vocabulary. arXiv
+  Language-directed physics-based character control. In                preprint arXiv:2511.22963, 2025b.
+  SIGGRAPH Asia 2022 Conference Papers, pp. 1–9, 2022.
+                                                                     Loper, M., Mahmood, N., Romero, J., Pons-Moll, G., and
+Kim, J., Kang, J., Choi, J., and Han, B. Fifo-diffusion:               Black, M. J. Smpl: a skinned multi-person linear model.
+  Generating infinite videos from text without training. Ad-           ACM Transactions on Graphics (TOG), 34(6):1–16, 2015.
+  vances in Neural Information Processing Systems, 37:
+  89834–89868, 2024.                                                 Mahmood, N., Ghorbani, N., Troje, N. F., Pons-Moll, G.,
+                                                                      and Black, M. J. Amass: Archive of motion capture as
+Kingma, D. P. and Welling, M. Auto-encoding variational               surface shapes. In Proceedings of the IEEE/CVF inter-
+  bayes. stat, 1050:1, 2014.                                          national conference on computer vision, pp. 5442–5451,
+                                                                      2019.
+Lee, D., Kim, C., Kim, S., Cho, M., and Han, W.-S. Autore-
+  gressive image generation using residual quantization. In          McFee, B., Raffel, C., Liang, D., Ellis, D. P., McVicar, M.,
+  Proceedings of the IEEE/CVF conference on computer                  Battenberg, E., and Nieto, O. librosa: Audio and music
+  vision and pattern recognition, pp. 11523–11532, 2022.              signal analysis in python. SciPy, 2015:18–24, 2015.
+
+Li, P., Starke, S., Ye, Y., and Sorkine-Hornung, O. Walk-            Petrovich, M., Black, M. J., and Varol, G. Action-
+  thedog: Cross-morphology motion alignment via phase                  conditioned 3d human motion synthesis with transformer
+  manifolds. In ACM SIGGRAPH 2024 Conference Papers,                   vae. In Proceedings of the IEEE/CVF international con-
+  pp. 1–10, 2024a.                                                     ference on computer vision, pp. 10985–10995, 2021.
+
+                                                                10
+         DiscoForcing: A Unified Framework for Real-Time Audio-Driven Character Control with Diffusion Forcing
+
+Punnakkal, A. R., Chandrasekaran, A., Athanasiou, N.,                   IEEE/CVF Conference on Computer Vision and Pattern
+  Quiros-Ramirez, A., and Black, M. J. Babel: Bodies,                   Recognition, pp. 21251–21262, 2024.
+  action and behavior with english labels. In Proceedings
+  of the IEEE/CVF conference on computer vision and pat-              Tevet, G., Raab, S., Gordon, B., Shafir, Y., Cohen-or, D.,
+  tern recognition, pp. 722–731, 2021.                                  and Bermano, A. H. Human motion diffusion model.
+                                                                        In The Eleventh International Conference on Learning
+Rasul, K., Seward, C., Schuster, I., and Vollgraf, R. Au-               Representations, 2023.
+  toregressive denoising diffusion models for multivariate
+  probabilistic time series forecasting. In International             Tevet, G., Raab, S., Cohan, S., Reda, D., Luo, Z., Peng,
+  conference on machine learning, pp. 8857–8868. PMLR,                  X. B., Bermano, A. H., and van de Panne, M. Closd:
+  2021.                                                                 Closing the loop between simulation and diffusion for
+                                                                        multi-task character control. In The Thirteenth Interna-
+Rombach, R., Blattmann, A., Lorenz, D., Esser, P., and                  tional Conference on Learning Representations, 2025.
+  Ommer, B. High-resolution image synthesis with latent
+  diffusion models. In Proceedings of the IEEE/CVF con-               Tseng, J., Castellon, R., and Liu, K. Edge: Editable dance
+  ference on computer vision and pattern recognition, pp.               generation from music. In Proceedings of the IEEE/CVF
+ 10684–10695, 2022.                                                     conference on computer vision and pattern recognition,
+Ruhe, D., Heek, J., Salimans, T., and Hoogeboom, E.                     pp. 448–458, 2023.
+  Rolling diffusion models. In Forty-first International
+                                                                      Van Den Oord, A., Vinyals, O., et al. Neural discrete rep-
+  Conference on Machine Learning, 2024.
+                                                                        resentation learning. Advances in neural information
+Saharia, C., Chan, W., Saxena, S., Li, L., Whang, J., Denton,           processing systems, 30, 2017.
+  E. L., Ghasemipour, K., Gontijo Lopes, R., Karagol Ayan,
+  B., Salimans, T., et al. Photorealistic text-to-image dif-          Wang, Y., Zheng, S., Cao, B., Wei, Q., Zeng, W., Jin, Q., and
+  fusion models with deep language understanding. Ad-                  Lu, Z. Scaling large motion models with million-level hu-
+  vances in neural information processing systems, 35:                 man motions. In Forty-second International Conference
+  36479–36494, 2022.                                                   on Machine Learning, 2025.
+
+Siyao, L., Yu, W., Gu, T., Lin, C., Wang, Q., Qian, C., Loy,          Wu, T., Fan, Z., Liu, X., Zheng, H.-T., Gong, Y., Jiao, J., Li,
+  C. C., and Liu, Z. Bailando: 3d dance generation by actor-           J., Guo, J., Duan, N., Chen, W., et al. Ar-diffusion: Auto-
+  critic gpt with choreographic memory. In Proceedings                 regressive diffusion model for text generation. Advances
+  of the IEEE/CVF Conference on Computer Vision and                    in Neural Information Processing Systems, 36:39957–
+  Pattern Recognition, pp. 11050–11059, 2022.                          39974, 2023.
+
+Sohl-Dickstein, J., Weiss, E., Maheswaranathan, N., and               Wu, Y., Karunratanakul, K., Luo, Z., and Tang, S. Uni-
+  Ganguli, S. Deep unsupervised learning using nonequi-                phys: Unified planner and controller with diffusion for
+  librium thermodynamics. In International conference on               flexible physics-based character control. arXiv preprint
+  machine learning, pp. 2256–2265. pmlr, 2015.                         arXiv:2504.12540, 2025.
+Song, J., Zhang, Q., Yin, H., Mardani, M., Liu, M.-Y.,                Xiao, L., Lu, S., Pi, H., Fan, K., Pan, L., Zhou, Y., Feng,
+  Kautz, J., Chen, Y., and Vahdat, A. Loss-guided diffu-                Z., Zhou, X., Peng, S., and Wang, J. Motionstreamer:
+  sion models for plug-and-play controllable generation.                Streaming motion generation via diffusion-based autore-
+  In International Conference on Machine Learning, pp.                  gressive model in causal latent space. In Proceedings
+  32483–32498. PMLR, 2023.                                              of the IEEE/CVF International Conference on Computer
+Song, K., Chen, B., Simchowitz, M., Du, Y., Tedrake,                    Vision, pp. 10086–10096, 2025.
+  R., and Sitzmann, V. History-guided video diffusion.
+                                                                      Yang, K., Tang, X., Peng, Z., Hu, Y., He, J., and Liu, H.
+  In Forty-second International Conference on Machine
+                                                                        MEGADance: Mixture-of-experts architecture for genre-
+  Learning, 2025.
+                                                                        aware 3d dance generation. In The Thirty-ninth Annual
+Starke, S., Mason, I., and Komura, T. Deepphase: Periodic               Conference on Neural Information Processing Systems,
+  autoencoders for learning motion phase manifolds. ACM                 2025a.
+  Transactions on Graphics (ToG), 41(4):1–13, 2022.
+                                                                      Yang, K., Tang, X., Peng, Z., Zhang, X., Wang, P.,
+Tang, J., Wang, J., Ji, K., Xu, L., Yu, J., and Shi, Y. A uni-          He, J., and Liu, H. Flowerdance: Meanflow for effi-
+  fied diffusion framework for scene-aware human motion                 cient and refined 3d dance generation. arXiv preprint
+  estimation from sparse signals. In Proceedings of the                 arXiv:2511.21029, 2025b.
+
+                                                                 11
+         DiscoForcing: A Unified Framework for Real-Time Audio-Driven Character Control with Diffusion Forcing
+
+Zhang, C., Tang, Y., Zhang, N., Lin, R.-S., Han, M., Xiao, J.,
+  and Wang, S. Bidirectional autoregessive diffusion model
+  for dance generation. In Proceedings of the IEEE/CVF
+  Conference on Computer Vision and Pattern Recognition,
+  pp. 687–696, 2024a.
+Zhang, J., Zhang, Y., Cun, X., Zhang, Y., Zhao, H., Lu,
+  H., Shen, X., and Shan, Y. Generating human motion
+  from textual descriptions with discrete representations.
+  In Proceedings of the IEEE/CVF conference on computer
+  vision and pattern recognition, pp. 14730–14740, 2023.
+Zhang, Z., Liu, R., Hanocka, R., and Aberman, K. Tedi:
+  Temporally-entangled diffusion for long-term motion syn-
+  thesis. In ACM SIGGRAPH 2024 Conference Papers, pp.
+  1–11, 2024b.
+Zhao, K., Li, G., and Tang, S. Dartcontrol: A diffusion-
+  based autoregressive motion model for real-time text-
+  driven motion control. In The Thirteenth International
+  Conference on Learning Representations, 2025.
+Zhou, Y., Barnes, C., Lu, J., Yang, J., and Li, H. On the
+  continuity of rotation representations in neural networks.
+  In Proceedings of the IEEE/CVF conference on computer
+  vision and pattern recognition, pp. 5745–5753, 2019.
+
+
+
+
+                                                                 12
+

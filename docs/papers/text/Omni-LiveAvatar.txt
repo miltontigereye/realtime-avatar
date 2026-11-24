@@ -1,0 +1,567 @@
+                                          Omni-LiveAvatar: Minute-Level Real-Time Streaming Joint Audio-Video Avatar
+                                                                         Generation
+                                                     Lunjie Zhu1,2 , Xingtong Ge1,2 , Fangyu Lin1,2 , Yi Zhang2 , Zhening Liu1 , Mengfei Li1,2 ,
+                                                                     Yumeng Zhang1 , Guanglu Song2 , Yu Liu2 , Jun Zhang1∗
+                                                                            1
+                                                                                iComAI Lab, Hong Kong University of Science and Technology
+                                                                                                 2
+                                                                                                   Vivix Group Limited
+                                                                                        lzhubb@connect.ust.hk, eejzhang@ust.hk
+
+                                                                        Abstract                               components such as reward models. While effective, they
+                                           Joint audio-video generative models serve as foundation for         do not examine whether the classic distillation pipeline re-
+                                           immersive and interactive digital-human generation. Never-          mains suitable for joint generation given the increased model
+                                           theless, most existing models rely on bidirectional attention       scale and the inherent complexity of multimodal modeling.
+                                           and multi-step denoising and can generate only short clips,         Moreover, existing joint audio-video autoregressive distilla-
+arXiv:2608.13602v2 [cs.MM] 17 Aug 2026
+
+
+
+
+                                           making them unsuitable for real-time interaction over ex-           tion methods are primarily restricted to short-clip generation,
+                                           tended durations. We present Omni-LiveAvatar, the first             leaving stable minute-level streaming avatar generation un-
+                                           framework for minute-level, real-time streaming joint audio-        derexplored.
+                                           video avatar generation. Specifically, we propose (1) a pro-           To address these challenges, we present Omni-
+                                           gressive autoregressive distillation pipeline that transfers a
+                                                                                                               LiveAvatar, the first framework for minute-level, real-time
+                                           large bidirectional joint audio-video diffusion model into
+                                           a few-step autoregressive generator without auxiliary stabi-        streaming joint audio-video avatar generation. Rather than
+                                           lization mechanisms; (2) a synchronized audio-video long-           patching an unstable training pipeline with modality-specific
+                                           short-term memory that preserves global consistency under           remedies, we revisit the classic distillation pipeline at a more
+                                           a bounded memory budget; and (3) a hierarchical rolling             fundamental level and develop a progressive autoregressive
+                                           prompt planning strategy that enables coherent semantic evo-        distillation pipeline that converts a bidirectional teacher into
+                                           lution and seamless prompt transitions. Extensive experiments       a real-time streaming generator without auxiliary designs.
+                                           show that Omni-LiveAvatar generates high-quality, synchro-          For minute-level generation, we introduce a synchronized
+                                           nized minute-level avatars in real time. In terms of speed, it      audio-video long-short-term memory mechanism that com-
+                                           achieves a 33× generation speedup over its teacher, LTX-2, on       bines periodically re-anchored long-term memory with a
+                                           a single NVIDIA H200 GPU; in terms of generation quality,
+                                                                                                               rolling key-value (KV) cache, preserving global consistency
+                                           it outperforms accelerated baselines across visual quality, au-
+                                           dio quality, cross-modal synchronization, and human fidelity.       and recent context under a bounded memory budget. To
+                                           Our code is available at https://github.com/Aoko955/Omni-           schedule long prompts under the joint audio-video rolling-
+                                           LiveAvatar                                                          forcing (Liu et al. 2025b) setting without semantic conflicts
+                                                                                                               across prompt transitions, we propose a hierarchical rolling
+                                                                1   Introduction                               prompt planning strategy that decomposes the full prompt
+                                                                                                               into a fixed global prompt, which specifies persistent appear-
+                                         Recently, remarkable progress has been made in joint audio-           ance, background, and overall motion, as well as block-level
+                                         video generative models (HaCohen et al. 2026; Low, Wang,              local prompts that advance together with the rolling window,
+                                         and Katyal 2025) for synthesizing high-fidelity, synchronized         thereby avoiding the overlapping or blurred speech caused
+                                         multimodal content. These advances lay a strong foundation            by abrupt prompt switching.
+                                         for interactive digital-human applications that demand real-
+                                                                                                                  In summary, our work focuses on real-time, long-duration
+                                         istic appearance, coherent motion, and accurate lip-synced
+                                                                                                               joint audio-video avatar synthesis and makes the following
+                                         speech (Lin et al. 2026). However, most existing models rely
+                                                                                                               contributions:
+                                         on bidirectional attention and multi-step denoising, which in-
+                                         curs high inference latency and confines generation to short           • We propose a progressive autoregressive distillation
+                                         clips. This makes them unsuitable for latency-sensitive ap-              pipeline that transfers a large bidirectional audio-video
+                                         plications that require continuous interaction over extended             diffusion model into a few-step causal generator without
+                                         durations.                                                               auxiliary stabilization mechanisms.
+                                            To enable real-time streaming generation, recent works (Su          • We design a synchronized audio-video long-short-term
+                                         et al. 2026; Li et al. 2026) adapt autoregressive distillation           memory mechanism that sustains global consistency and
+                                         techniques (Ge et al. 2026a,b) originally developed for video            cross-modal alignment under a bounded memory budget.
+                                         generation to joint audio-video models. However, these meth-
+                                         ods largely rely on modality-specific remedies, such as audio          • We introduce a hierarchical rolling prompt planning strat-
+                                         sink tokens or additional future audio context, and external             egy that enables coherent semantic transitions under the
+                                            ∗                                                                     joint rolling-forcing setting.
+                                                Corresponding author.
+Hallo-Live OmniForcing
+
+
+
+
+                          That               Move               Confidence              Is                   To                    How
+Ours
+
+
+
+
+                         0s      The first framework enabling ~22 FPS, minute-level streaming joint audio-video avatar generation.         1minute
+
+    Figure 1: Qualitative comparison of minute-level generation. Compared with state-of-the-art baselines, Omni-LiveAvatar pre-
+    serves consistent avatar and background appearance, and maintains tight audio-video alignment over a minute-long rollout,
+    whereas OmniForcing and Hallo-Live exhibit severe appearance drift. In the bottom row, the syllable uttered at each frame is
+    highlighted in red, and the insets show the corresponding mouth shapes for lip-audio alignment.
+
+            • Extensive experiments show that Omni-LiveAvatar gener-                  Live (Li et al. 2026) employs future-expanding audio atten-
+              ates high-quality, synchronized minute-level audio-video                tion and preference-guided distribution matching distillation
+              avatars in real time, achieving a 33× generation speedup                (DMD) with external reward models. However, these ap-
+              over its teacher LTX-2 while outperforming accelerated                  proaches address the challenges of joint audio-video autore-
+              baselines across all evaluated dimensions.                              gressive distillation mainly through auxiliary stabilization
+                                                                                      mechanisms or external supervision, rather than fundamen-
+                                      2    Related Work                               tally revisiting the distillation framework. Moreover, existing
+    Audio-Driven Avatar Generation. Building on powerful                              methods are designed and evaluated primarily for short-clip
+    diffusion models (Wan et al. 2025; Kong et al. 2024), audio-                      generation, leaving stable minute-level generation underex-
+    driven avatar generation has witnessed remarkable advances                        plored.
+    in visual fidelity (Tian et al. 2024; Xu et al. 2024a; Chen
+    et al. 2024; Cui et al. 2025; Chen et al. 2025), long-duration                                            3    Method
+    consistency (Jiang et al. 2025; Cui et al. 2024; Yang et al.                      3.1    Problem Formulation and Method Overview
+    2025b; Tu et al. 2025), and real-time streaming capability (Xu                    Given a text prompt C describing an avatar, scene, and audio
+    et al. 2024b; Zhen et al. 2025; Huang et al. 2026c; Shen et al.                   content, our goal is to generate a minute-level avatar video
+    2025). However, these audio-driven methods rely on pre-                           V together with synchronized audio A in real time. While a
+    generated audios and lack mutual adaptation between the                           natural direction is to extend autoregressive distillation meth-
+    audio and video streams, complicating the overall generation                      ods from video generation to joint audio-video generation,
+    pipeline and limiting flexible audio-video coordination.                          this extension faces three challenges: (i) scaling the distilla-
+    Autoregressive Joint Audio-Video Generation. Joint                                tion to larger multi-modal models, where audio modeling and
+    audio-video generation models produce both audio and                              cross-modal coupling increase distillation difficulty; (ii) con-
+    video within a unified framework and generally follow three                       trolling cross-modal drift, where visual and audio drifts ac-
+    paradigms: cascaded generation (Ruan et al. 2023), dual-                          cumulate over time and reinforce each other, degrading iden-
+    stream modeling with cross-modal interaction (Low, Wang,                          tity consistency, speech quality, and lip synchronization; and
+    and Katyal 2025; HaCohen et al. 2026), and unified single-                        (iii) scheduling heterogeneous semantics, to coordinate the
+    stream modeling (SII-GAIR et al. 2026). However, they all                         slowly varying visual context with rapidly changing speech
+    rely on bidirectional attention and multi-step denoising, re-                     content over minute-long generation. Omni-LiveAvatar ad-
+    sulting in slow inference and high computational costs (Low,                      dresses these challenges with progressive autoregressive dis-
+    Wang, and Katyal 2025; HaCohen et al. 2026; Li et al. 2025;                       tillation, synchronized audio-video long-short-term memory,
+    Huang et al. 2026a,b).                                                            and hierarchical rolling prompt planning, whose details are
+       To enable real-time interactive applications, recent works                     presented in the following subsections.
+    adapt autoregressive distillation pipelines and acceleration
+    techniques (Yin et al. 2025; Huang et al. 2025; Zhu et al.                        3.2    Progressive Autoregressive Distillation for
+    2026) developed for video models to joint audio-video mod-                               Joint Audio-Visual Generation
+    els. OmniForcing (Su et al. 2026) introduces audio sink to-                       Existing autoregressive distillation methods for video gener-
+    kens to stabilize joint audio-video causalization, while Hallo-                   ation (Liu et al. 2025b; Huang et al. 2025) typically initialize
+                   Few-step Distillation              Trajectory-Aligned Causal Initialization                       Joint Rolling Forcing
+                                                                                                                    σ1 σ2 σ3 σ3        Rolling Window
+
+
+
+
+                                                                                                 Inference Steps
+ Training
+                                                     Causal
+                 Multi-              Few-            Mask
+                  step               step                           Regression
+
+                          DMD Loss
+
+                                                                                                                       Generation Sequence
+
+               Synchronized Audio-Video Long-Short-Term Memory                                                                Streaming
+                    Video
+                                       Periodicaly
+ Inference
+
+
+
+
+             Long-term Memory
+                                       Re-anchor              Rolling KV Cache                                     RF Window
+                    Audio
+
+
+                   Global Prompt
+               Hierarchical Rolling Prompt Planning                                Local Prompt
+Figure 2: Overview of Omni-LiveAvatar. The proposed progressive autoregressive distillation pipeline converts a large bidi-
+rectional audio-video diffusion model into a few-step causal generator without any auxiliary stabilization mechanism (top). At
+inference, the synchronized audio-video long-short-term memory preserves global consistency while retaining recent context
+within a bounded memory budget for minute-level streaming inference (middle), and the hierarchical rolling prompt planning
+organizes global and local prompts for smooth long-form semantic evolution (bottom).
+
+
+a few-step causal student by regressing the ordinary differen-               In Stage II, we convert Gbifew into a causal few-step gener-
+tial equation (ODE) trajectories of a pre-trianed bidirectional           ator Gcausal
+                                                                                 few    by applying  a block-causal  attention mask over
+teacher. However, such initialization does not readily ex-                audio-video macro-blocks, where Bk = (Vk , Ak ) denotes
+tend to joint audio-video generation, where the larger model              the k-th macro-block containing temporally aligned video
+scale, complex cross-modal coupling, and modality asym-                   and audio latents over a one-second interval (Su et al. 2026).
+metry make bidirectional-to-causal adaptation substantially               To avoid trajectory mismatch and stabilize causal initializa-
+more difficult. To obtain a stronger few-step causal initial-             tion, we generate ODE pairs with the frozen Gbi    few and train
+ization, OmniForcing (Su et al. 2026) decouples few-step                  Gcausal  via ODE   regression:
+                                                                            few
+distillation from causal adaptation by first applying distri-
+                                                                                                                                   2
+bution matching distillation (DMD) to obtain a lightweight                           LC-ODE =λv vθv (xt ) − vϕv (xt ) 2
+few-step generator and then performing causal ODE regres-                                                                               2
+                                                                                                                                                   (2)
+sion. However, its ODE pairs are generated by the original                                       + λa vθa (xt ) − vϕa (xt ) 2 ,
+multi-step teacher1 . As illustrated in Figure 3, DMD matches             where xt is the joint noisy latent at denoising timestep t, vϕ
+the output distribution but does not preserve the pointwise               and vθ denote the velocity predictions of the bidirectional
+denoising trajectory. Therefore, the causal student is forced             few-step teacher Gbi                              causal
+                                                                                              few and the causal student Gfew      at xt ,
+to regress toward ODE targets from a different trajectory,                respectively. λv and λa balance the video and audio regres-
+which leads to unstable causal training and explains why                  sion losses.
+OmniForcing requires additional stabilization mechanisms.                    However, strict block-causal rollout causes errors to prop-
+   To address these issues, we develop a progressive autore-              agate and accumulate unidirectionally, leading to severe drift
+gressive distillation pipeline comprising few-step distillation,          during long-horizon inference. To address this, in Stage III,
+trajectory-aligned causal initialization, and joint rolling forc-         we introduce joint rolling forcing. Specifically, we construct
+ing, enabling stable causal adaptation and efficient few-step             a rolling window of M consecutive macro-blocks with pro-
+generation without relying on auxiliary designs. Specifically,            gressively increasing noise levels:
+in Stage I, we first distill the pretrained bidirectional audio-
+video diffusion model Gbi                                                   Wk = {Bkσ1 , Bk+1
+                                                                                          σ2             σM
+                                                                                              , . . . , Bk+M −1 }, σ1 < · · · < σM . (3)
+                             base into a bidirectional few-step
+generator Gbi few , optimizing  the student with a joint audio-           where Biσ denotes the i-th audio-video macro-block at noise
+video DMD loss (Yin et al. 2024):                                         level σ. In each forward pass, all blocks inside Wk are jointly
+              LBi-DMD = λv LvDMD + λa LaDMD ,                 (1)         denoised with bidirectional intra-modal and cross-modal at-
+                                                                          tention within the window. The cleanest block, Bkσ1 , then
+where λv and λa balance the video and audio losses.
+                                                                          exits the window, while the remaining blocks advance to the
+    1
+        https://github.com/OmniForcing/OmniForcing/issues/8               next denoising step with a new Gaussian-noise-corrupted
+                                  Teacher                          this problem, we periodically re-anchor the long-term mem-
+                        X0        Student                          ory. Specifically, We store its pre-RoPE keys Korig and, after
+  Xt                                                               each five-second chunk has been generated, reapply RoPE
+                                                                   to Korig using positions immediately preceding the current
+                                                                   rolling KV cache while keeping the corresponding values un-
+                                                                   changed. This preserves the memory content while reducing
+                                                                   the RoPE position gap between the long-term memory and
+                                                                   current queries, maintaining the influence of the long-term
+   Teacher
+   Student
+                         X0                                        memory during minute-level generation.
+
+                                                                   3.4   Hierarchical Rolling Prompt Planning
+Figure 3: Visualization of the denoising trajectories (left) and   With progressive autoregressive distillation and syn-
+output distributions (right) of the multi-step teacher and few-    chronized audio-video long-short-term memory, Omni-
+step student. Projected via principal component analysis, the      LiveAvatar achieves stable real-time inference for long-
+visualization shows that DMD aligns the output distribution        horizon joint generation. However, the joint rolling-forcing
+but disrupts the pointwise denoising trajectory.                   paradigm introduces two new challenges for prompt plan-
+                                                                   ning. First, fixed-interval prompt switching, as adopted in
+                                                                   LongLive (Yang et al. 2025a), is incompatible with rolling
+block being appended. We train this stage with the same            forcing: when a rolling window crosses a prompt boundary,
+joint audio-video DMD objective as in Stage I, applied over        blocks conditioned on different prompts are jointly denoised
+all macro-blocks in Wk .                                           and attend to each other, causing semantic conflicts and lead-
+   Because the active rolling window enables bidirectional         ing to overlapping or blurred speech near transitions. Second,
+interaction, earlier blocks are no longer frozen as potentially    audio and video require textual conditioning at different tem-
+erroneous context for later blocks. Instead, they can lever-       poral granularities. Visual semantics such as identity, scene,
+age information from future blocks for refinement, thereby         and motion evolve slowly and are better controlled by coarse-
+suppressing unidirectional error propagation. Moreover, au-        grained prompts, whereas speech content changes continu-
+dio latents form a one-dimensional temporal sequence and           ously and requires fine-grained sentence-level updates.
+are easier to model than high-dimensional video latents, thus         To address these challenges, we propose a hierarchical
+granting the video branch access to future audio cues there-       rolling prompt planning strategy. Specifically, we decompose
+fore improves both the visual quality and cross-modal align-       the full prompt into a global prompt for persistent sequence-
+ment.                                                              level semantics and local prompts for block-level speech con-
+                                                                   tent. For the global prompt P global , we keep its embedding
+3.3    Synchronized Audio-Video Long-Short-Term                    fixed throughout generation, providing a stable global condi-
+       Memory                                                      tion. For the local prompts, we partition the speech descrip-
+                                                                   tion into block-level segments, where Pklocal denotes the local
+Existing streaming joint audio-video avatar generators (Li         prompt assigned to macro-block Bk . For each rolling win-
+et al. 2026) primarily rely on KV caches (Zhao et al. 2025)        dow Wk , the effective condition is formed by concatenating
+to preserve recent context during causal inference. Although       the fixed global prompt with the local prompts of the blocks
+a rolling KV cache can propagate visual and voice infor-           within the rolling window:
+mation across adjacent blocks, these attributes are inherited
+                                                                            P(Wk ) = P global ; Pklocal , . . . , Pk+M
+                                                                                                                   local
+                                                                                                                          
+recursively from imperfect model predictions, so small de-                                                               −1 .  (4)
+viations may accumulate over long horizons and eventually
+cause drift.                                                       When the rolling window advances from Wk to Wk+1 , the
+                                                                   oldest local prompt Pklocal leaves the window and the local
+   To counteract this drift, we introduce a synchronized                      local
+audio-video long-short-term memory. We retain the KV               prompt Pk+M      of the newly entering block is appended, so
+states of the first audio-video macro-block B0 = (V0 , A0 ) as     the effective condition shifts smoothly rather than switch-
+long-term memory Mlong , which remains permanently vis-            ing abruptly at fixed boundaries. Together, the hierarchical
+ible to all subsequent blocks and provides a stable reference      rolling prompt planning enables smooth scheduling of textual
+for identity, scene, voice timbre, and audio-video correspon-      conditions at different granularities under the joint rolling-
+dence. In parallel, we maintain a rolling KV cache over the        forcing paradigm.
+most recent L macro-blocks as short-term memory Mshort ,
+which preserves motion and speech continuity. Given access                             4    Experiments
+to temporally aligned audio and video states, both memories        In this section, we first describe the experimental setup, in-
+achieve modality stability through self-attention and cross-       cluding the baselines, implementation details, and evaluation
+modal fidelity through cross-attention.                            protocols in Section 4.1. We then present the main results
+   As generation proceeds, the relative positional offset be-      of the generation quality and speed for both 5-second and
+tween the long-term memory and current queries increases,          minute-level streaming generation in Section 4.2. Finally, we
+weakening the influence of the long-term memory embed-             conduct ablation studies to validate the design choices of key
+ded in the Rotary Position Embedding (RoPE). To address            components in Section 4.3.
+Ovi
+LTX-2
+OmniForcing
+Hallo-Live
+Ours
+
+
+
+
+ Figure 4: Qualitative comparison of 5-second avatar generation. Omni-LiveAvatar generates realistic and temporally consistent
+ avatars with visual quality comparable to Ovi and LTX-2, whereas OmniForcing exhibits noticeable realism degradation and
+ Hallo-Live suffers from facial and hand artifacts as well as color drift.
+
+
+ 4.1          Experimental Setup                                  ing Human Anatomy (HA), Human Identity (HI), and Hu-
+ Baselines. We compare Omni-LiveAvatar against two rep-           man Clothing (HC). For audio quality, we report three non-
+ resentative frameworks for real-time autoregressive joint        intrusive mean opinion score (MOS) predictors commonly
+ audio-video generation:                                          used in speech synthesis and speech quality assessment: UT-
+                                                                  MOS (Saeki et al. 2022) (UT) for speech naturalness, DNS-
+     • OmniForcing (Su et al. 2026): the current state-of-the-    MOS (Reddy, Gopal, and Cutler 2022) (DN) for noise and
+       art (SOTA) framework for general text-to-audio-video       distortion, and NISQA (Mittag et al. 2021) (NI) for temporal
+       (T2AV) generation.                                         continuity. For audio-video alignment, we use SyncNet con-
+     • Hallo-Live (Li et al. 2026): the current SOTA framework    fidence (Chung and Zisserman 2016) (Sync-C) to measure
+       for avatar-specific audio-video generation.                lip-speech synchronization. For generation speed, we follow
+ Metrics. To comprehensively evaluate Omni-LiveAvatar, we         Rolling Forcing (Liu et al. 2025b) and report throughput in
+ compare model capabilities across six dimensions: video          frames per second (FPS) on a single NVIDIA H200 GPU to
+ quality, text-video alignment, human fidelity, audio quality,    quantify real-time streaming capability.
+ audio-video alignment, and generation speed.
+    For video quality (VQ), we use VBench (Huang et al.           Implementation Details. We build Omni-LiveAvatar on
+ 2023) to evaluate per-frame fidelity and temporal coher-         top of the 19B LTX-2 model (HaCohen et al. 2026). All
+ ence, reporting the Quality Score (QS) together with Subject     training is conducted on 8 NVIDIA H200 GPUs in bf16 pre-
+ Consistency (SC), Background Consistency (BC), Aesthetic         cision using the AdamW optimizer with a global batch size
+ Quality (AQ), and Imaging Quality (IQ). For long-form video      of 8. We train Omni-LiveAvatar on an internal dataset of 35K
+ quality, we use VBench-Long (Huang et al. 2024) and report       text prompts. Using these prompts, we generate the Stage II
+ Subject Consistency (SC), Motion Smoothness (MS), Aes-           ODE regression pairs from our Stage-I few-step model. We
+ thetic Quality (AQ), and Imaging Quality (IQ). For text-video    train Stage I, Stage II, and Stage III for 4,000, 3,000, and
+ alignment, we use VideoAlign (VA) (Liu et al. 2025a) to as-      3,000 steps, with learning rates of 2 × 10−5 , 1 × 10−4 , and
+ sess semantic consistency between the generated video and        2 × 10−5 , respectively. For the training objective, the video
+ the text prompt. For text-video alignment, we use VideoAlign     and audio losses are equally weighted (λv = λa = 1.0)
+ (VA) (Liu et al. 2025a). For human fidelity, we adopt human-     across all stages, and the classifier-free guidance scales in the
+ centric metrics from VBench 2.0 (Zheng et al. 2025) to eval-     DMD stages (Stage I and Stage III) are set to 3 and 5 for the
+ uate the quality and consistency of generated avatars, includ-   video and audio streams, respectively. For the memory con-
+                                    Speed            Video Quality                        Human Fidelity          Audio Quality
+Method                                                                           VA↑                                              Sync-C↑
+                                    FPS↑    SC↑    BC↑   AQ↑      IQ↑    QS↑            HA↑    HI↑      HC↑      UT↑ DN↑ NI↑
+ Bidirectional Models
+LTX-2 (HaCohen et al. 2026)         0.60    92.54 93.42 56.37 71.53 79.39 7.77 96.23 92.93              99.57    3.54 3.75 3.47     6.89
+Ovi (Low, Wang, and Katyal 2025)    1.41    97.10 95.29 33.13 65.83 76.14 6.51 98.55 97.13              99.19    3.10 3.72 2.63     6.88
+Real-time Autoregressive Models
+OmniForcing (Su et al. 2026)        16.11 98.05 94.47 60.14 70.75 80.05 8.11 88.76 98.51 100.00 2.46 3.84 3.03                      1.60
+Hallo-Live (Li et al. 2026)         16.50 98.20 93.64 27.97 66.04 74.21 8.04 98.39 97.42 100.00 2.96 3.81 2.95                      4.50
+Omni-LiveAvatar                     19.57 99.28 97.52 63.61 72.11 81.72 9.08 98.76 100.00 100.00 3.19 3.95 3.06                     6.16
+
+Table 1: Quantitative comparison on 5-second avatar generation. The best results among the real-time autoregressive models
+are highlighted in bold, and ↑ indicates that higher values are better.
+
+                                  Speed           Video Quality                        Human Fidelity           Audio Quality
+Method                                                                     VA↑                                                    Sync-C↑
+                                   FPS↑     SC↑   MS↑ AQ↑          IQ↑            HA↑      HI↑       HC↑    UT↑ DN↑ NI↑
+Real-time Autoregressive Models
+OmniForcing (Su et al. 2026) 16.18 98.71 99.38 54.90 71.70 6.68 92.14 50.19 100.00 1.60 3.51 2.90                                  0.28
+Hallo-Live (Li et al. 2026)  13.80 99.50 99.19 47.16 61.18 5.46 97.81 67.60 77.20 2.02 3.97 2.99                                   0.72
+Omni-LiveAvatar              21.99 99.55 99.68 61.98 71.71 9.82 99.85 98.61 100.00 2.80 4.04 3.24                                  6.76
+
+Table 2: Quantitative comparison on minute-level avatar generation. Omni-LiveAvatar achieves the best performance across all
+evaluated metrics, with particularly strong speed, aesthetic quality (AQ), human identity (HI) fidelity, and audio-video alignment.
+
+
+figuration, both the rolling-forcing window and the rolling              distilled baselines. In terms of video quality and human-
+KV cache span 4 macro-blocks, while the long-term memory                 centric fidelity, Omni-LiveAvatar outperforms all competi-
+retains the first macro-block. During inference, our few-step            tors, including both bidirectional and autoregressive models.
+generator produces each block in four denoising steps at a               Its overall quality score (QS) exceeds the second-best result
+resolution of 512 × 768, enabling streaming generation up                by 1.7 (81.72 vs. 80.05), and its human identity (HI) and
+to minute-level duration.                                                clothing (HC) fidelity both reach a perfect score of 100.
+                                                                         Omni-LiveAvatar also achieves the best text-video align-
+4.2   Main Results                                                       ment (VA), surpassing the others by at least 0.97 (9.08 vs.
+We compare Omni-LiveAvatar against two families of base-                 8.11). For audio quality, Omni-LiveAvatar consistently out-
+lines: offline bidirectional joint audio-video generation mod-           performs the autoregressive baselines across all metrics, with
+els, including LTX-2 (HaCohen et al. 2026) and Ovi (Low,                 only marginal degradation in naturalness (UT) and continuity
+Wang, and Katyal 2025), and real-time autoregressive dis-                (NI) compared with the bidirectional teacher. A similar trend
+tilled models, including OmniForcing (Su et al. 2026) and                is observed for audio-video synchronization (Sync-C). Over-
+Hallo-Live (Li et al. 2026). We conduct comprehensive ex-                all, these results demonstrate that Omni-LiveAvatar achieves
+periments on both 5-second and 60-second sequence gener-                 real-time generation without sacrificing quality, consistently
+ation, demonstrating that Omni-LiveAvatar outperforms the                outperforming real-time baselines across all evaluated met-
+autoregressive distilled baselines in both short-clip and long-          rics while remaining competitive with offline bidirectional
+sequence generation.                                                     models in quality.
+Generation Results on 5-Second Clips. We present the                     Generation Results on 60-Second Sequences. We show
+quantitative and qualitative results in Table 1 and Figure 4,            the quantitative and qualitative results for minute-level gen-
+respectively. As shown in Figure 4, OmniForcing (Su et al.               eration in Table 2 and Figure 1, respectively. As shown in
+2026) produces avatars with degraded realism and Hallo-                  Figure 1, both the avatars and the backgrounds generated
+Live (Li et al. 2026) suffers from facial artifacts, spuri-              by OmniForcing and Hallo-Live exhibit drastic color and
+ous hands, and noticeable color bias and drift. In contrast,             structural distortions, whereas Omni-LiveAvatar maintains
+Omni-LiveAvatar generates natural and consistent avatars,                stable and consistent visual appearance throughout the one-
+achieving visual quality comparable to the two bidirectional             minute sequence. To visualize audio-video synchronization
+models. Quantitatively, Omni-LiveAvatar achieves real-time               at the syllable level, we transcribe the generated speech us-
+generation at 19.57 FPS on a single NVIDIA H200 GPU,                     ing Whisper (Radford et al. 2022), obtain syllable timestamps
+delivering a ∼33× speedup over its bidirectional teacher                 through forced alignment (McAuliffe et al. 2017), and inspect
+LTX-2 and a speedup of about 1.2× over the autoregressive                the mouth shapes in the corresponding video frames. Figure 1
+shows that the lip motion generated by Omni-LiveAvatar re-                                     VQ    Audio Quality
+mains closely aligned with the speech throughout the minute-        Variant                                          Sync-C↑ VA↑
+level generation. Quantitatively, Omni-LiveAvatar outper-                                     QS↑ UT↑ DN↑ NI↑
+forms the autoregressive-distilled baselines across all eval-       w/o RF & w/o TA-ODE 72.05 1.51 3.21 2.70           1.23    1.24
+uated metrics. Specifically, it achieves real-time streaming
+                                                                    w/o RF              80.67 1.93 3.38 2.44           4.58    8.09
+generation at 21.99 FPS, running 1.36× faster than the
+second-fastest baseline (16.18 FPS). The quality improve-           w/o TA-ODE          81.25 3.14 3.81 2.96           5.98    8.63
+ments are particularly notable in human identity (HI, 98.61         Ours                81.72 3.19 3.95 3.06           6.16    9.08
+vs. 67.60 and 50.19), audio-video synchronization (Sync-C,
+6.76 vs. 0.72 and 0.28), and text-video alignment (VA, 9.82                    Table 3: Ablation of training strategies.
+vs. 6.68 and 5.46). These results demonstrate that Omni-
+LiveAvatar not only excels on short clips but also pioneers
+                                                                                     Video Quality Audio Quality
+real-time, high-fidelity, and temporally coherent streaming          Variant                                         Sync-C↑ VA↑
+generation at the minute scale.                                                      AQ↑    IQ↑     UT↑ DN↑ NI↑
+                                                                     w/o LTM       58.61    71.16   2.79 4.03 3.22     5.79    9.70
+4.3   Ablation Study
+                                                                     w/o re-anchor 61.16    71.43   2.78 4.02 3.23     6.70    9.82
+Ablation on Training Methods. To validate our proposed               async LTM     61.93    71.69   2.76 4.03 3.21     6.61    9.80
+progressive autoregressive distillation strategy, we perform
+                                                                     Ours          61.98    71.71   2.80 4.04 3.24     6.76    9.82
+ablations on joint rolling forcing (RF) and trajectory-aligned
+causal initialization (TA-ODE). Specifically, we compare our
+method against three settings: (1) using joint self forcing in-               Table 4: Ablation of memory mechanisms.
+stead of joint rolling forcing and generating the ODE pairs
+with the multi-step teacher (w/o RF & w/o TA-ODE); (2)                                        VQ       Audio Quality
+using joint self forcing instead of joint rolling forcing (w/o     Variant                                             Sync-C↑ VA↑
+RF); and (3) generating the ODE pairs with the multi-step                                  AQ↑ IQ↑ UT↑ DN↑ NI↑
+teacher (w/o TA-ODE). As shown in Table 3, the w/o RF              w/o rolling prompt 55.74 68.45 1.60 3.28 2.38        4.47    9.72
+& w/o TA-ODE setting degrades drastically across all eval-
+                                                                   5 s-interval switching 61.23 71.33 2.65 3.94 3.19    5.11    9.71
+uated quality metrics. Adding either rolling forcing or TA-
+ODE alone already yields consistent improvements across all        Ours                   61.98 71.71 2.80 4.04 3.24    6.76    9.82
+metrics over the w/o RF & w/o TA-ODE variant. However,
+compared with ours, w/o RF mainly degrades audio quality                 Table 5: Ablation of prompt planning strategies.
+and audio-video synchronization, reducing UTMOS from
+3.19 to 1.93 and Sync-C from 6.16 to 4.58, whereas w/o
+TA-ODE primarily degrades video quality and text-video             cated long-term memory and re-anchoring designs.
+alignment, with Qulity Score (QS) dropping from 81.72 to           Ablation on Prompt Planning Strategy. To validate our
+81.25 and VideoAlign (VA) from 9.08 to 8.63. Only when             hierarchical rolling prompt planning, we compare it against
+trajectory-aligned causal initialization and joint rolling forc-   two settings: (1) providing the full prompt to the model at
+ing are combined does the model achieve the best perfor-           once (w/o rolling prompt); and (2) updating the prompt every
+mance, confirming that the two are jointly necessary.              5 s (5 s-interval switching). As shown in Table 5, the audio-
+Ablation on Memory Mechanism. To validate our syn-                 related metrics are more sensitive to the prompt planning
+chronized audio-video long-short-term memory, we compare           strategy than the video-related metrics, indicating that au-
+it against three settings: (1) without the long-term memory        dio requires a finer-grained and smoother prompt schedule.
+(w/o LTM); (2) without periodic RoPE re-anchoring (w/o re-         Specifically, exerting the full prompt at once yields the largest
+anchor); and (3) with temporally misaligned audio and video        drops across nearly all metrics, notably including the audio
+long-term memory (async LTM). As shown in Table 4, the             naturalness (UT) from 2.80 to 1.60 and SyncNet confidence
+video branch is more dependent on the memory mechanism             (Sync-C) from 6.76 to 4.47. Updating the prompt every 5 s
+than the audio branch during long-horizon inference, which         mainly degrades the audio-quality metrics as well as audio-
+indicates that video generation is more vulnerable to tem-         video alignment, with SyncNet confidence (Sync-C) drop-
+poral drift due to its modality complexity. Specifically, w/o      ping from 6.76 to 5.11. These results show that, under joint
+LTM causes the largest degradation in both video quality and       rolling-forcing inference paradigm, our hierarchical rolling
+audio-video synchronization, with Aesthetic Quality drop-          prompt planning enables smooth, continuous, and aligned
+ping from 61.98 to 58.61 and SyncNet confidence from 6.76          audio-video generation
+to 5.79. Removing re-anchoring mainly weakens the video
+quality metrics while async LTM primarily harms cross-                                     Conclusions
+modal alignment qualified by SyncNet confidence (Sync-C).          In this paper, we present Omni-LiveAvatar, the first frame-
+These results demonstrate that our synchronized audio-video        work for minute-level, real-time streaming joint audio-video
+long-short-term memory guarantees the stability and audio-         avatar generation. We introduce a progressive autoregressive
+video alignment of long-horizon generation with sophisti-          distillation pipeline to transform a large bidirectional audio-
+video diffusion model into a few-step causal generator; a syn-     Huang, Y.; Guo, H.; Wu, F.; Wang, W.; Zhang, S.; Huang,
+chronized audio-video long-short-term memory to preserve           S.; Gan, Q.; Liu, L.; Zhao, S.; Chen, E.; Liu, J.; and Hoi,
+long-duration consistency and cross-modal alignment under          S. 2026c. Live Avatar: Streaming Real-time Audio-Driven
+a bounded memory budget; and a hierarchical rolling prompt         Avatar Generation with Infinite Length. arXiv:2512.04677.
+planning strategy to enable coherent semantic evolution and        Huang, Z.; He, Y.; Yu, J.; Zhang, F.; Si, C.; Jiang, Y.; Zhang,
+seamless prompt transitions under the rolling-forcing setting.     Y.; Wu, T.; Jin, Q.; Chanpaisit, N.; Wang, Y.; Chen, X.; Wang,
+Extensive experiments demonstrate that Omni-LiveAvatar             L.; Lin, D.; Qiao, Y.; and Liu, Z. 2023. VBench: Com-
+achieves a 33× speedup over its LTX-2 teacher on a single          prehensive Benchmark Suite for Video Generative Models.
+NVIDIA H200 GPU while outperforming real-time base-                arXiv:2311.17982.
+lines across all evaluated metrics.
+                                                                   Huang, Z.; Zhang, F.; Xu, X.; He, Y.; Yu, J.; Dong, Z.; Ma,
+                                                                   Q.; Chanpaisit, N.; Si, C.; Jiang, Y.; Wang, Y.; Chen, X.;
+                                                                   Chen, Y.-C.; Wang, L.; Lin, D.; Qiao, Y.; and Liu, Z. 2024.
+                        References                                 VBench++: Comprehensive and Versatile Benchmark Suite
+Chen, Y.; Liang, S.; Zhou, Z.; Huang, Z.; Ma, Y.; Tang, J.;        for Video Generative Models. arXiv:2411.13503.
+Lin, Q.; Zhou, Y.; and Lu, Q. 2025. HunyuanVideo-Avatar:           Jiang, J.; Liang, C.; Yang, J.; Lin, G.; Zhong, T.; and Zheng,
+High-Fidelity Audio-Driven Human Animation for Multiple            Y. 2025. Loopy: Taming Audio-Driven Portrait Avatar with
+Characters. arXiv:2505.20156.                                      Long-Term Motion Dependency. arXiv:2409.02634.
+Chen, Z.; Cao, J.; Chen, Z.; Li, Y.; and Ma, C. 2024.              Kong, W.; Tian, Q.; Zhang, Z.; Min, R.; Dai, Z.; Zhou, J.;
+EchoMimic: Lifelike Audio-Driven Portrait Animations               Xiong, J.; Li, X.; Wu, B.; Zhang, J.; et al. 2024. Hunyuan-
+through Editable Landmark Conditions. arXiv:2407.08136.            video: A systematic framework for large video generative
+Chung, J. S.; and Zisserman, A. 2016. Out of time: automated       models. arXiv preprint arXiv:2412.03603.
+lip sync in the wild. In Asian conference on computer vision,      Li, C.; Li, J.; Mei, R.; Xia, H.; Zhu, H.; Wang, J.; and Zhu, S.
+251–263. Springer.                                                 2026. Hallo-Live: Real-Time Streaming Joint Audio-Video
+Cui, J.; Li, H.; Yao, Y.; Zhu, H.; Shang, H.; Cheng, K.; Zhou,     Avatar Generation with Asynchronous Dual-Stream and
+H.; Zhu, S.; and Wang, J. 2024. Hallo2: Long-Duration and          Human-Centric Preference Distillation. arXiv:2604.23632.
+High-Resolution Audio-Driven Portrait Image Animation.             Li, Y.; Liu, Z.; Li, Z.; Lin, Z.; and Zhang, J. 2025. Reme-
+arXiv:2410.07718.                                                  dyGS: Defend 3D Gaussian Splatting against Computation
+Cui, J.; Li, H.; Zhan, Y.; Shang, H.; Cheng, K.; Ma, Y.; Mu,       Cost Attacks. arXiv:2511.22147.
+S.; Zhou, H.; Wang, J.; and Zhu, S. 2025. Hallo3: Highly           Lin, F.; Hu, Y.; Zhu, L.; Liu, Z.; Huang, Y.; Lin, Z.; and
+Dynamic and Realistic Portrait Image Animation with Video          Zhang, J. 2026. Real-Time Human Frontal View Synthesis
+Diffusion Transformer. arXiv:2412.00733.                           from a Single Image. arXiv:2603.15433.
+Ge, X.; Zhang, X.; Xu, T.; Zhang, Y.; Zhang, X.; Wang,             Liu, J.; Liu, G.; Liang, J.; Yuan, Z.; Liu, X.; Zheng, M.;
+Y.; and Zhang, J. 2026a. SenseFlow: Scaling Distribu-              Wu, X.; Wang, Q.; Xia, M.; Wang, X.; Liu, X.; Yang, F.;
+tion Matching for Flow-based Text-to-Image Distillation.           Wan, P.; Zhang, D.; Gai, K.; Yang, Y.; and Ouyang, W.
+arXiv:2506.00523.                                                  2025a. Improving Video Generation with Human Feedback.
+Ge, X.; Zhang, Y.; Huang, Y.; He, D.; Wang, X.; Ma, B.;            arXiv:2501.13918.
+Song, G.; Liu, Y.; and Zhang, J. 2026b. Salt: Self-Consistent      Liu, K.; Hu, W.; Xu, J.; Shan, Y.; and Lu, S. 2025b. Rolling
+Distribution Matching with Cache-Aware Training for Fast           Forcing: Autoregressive Long Video Diffusion in Real Time.
+Video Generation. arXiv:2604.03118.                                arXiv:2509.25161.
+HaCohen, Y.; Brazowski, B.; Chiprut, N.; Bitterman, Y.;            Low, C.; Wang, W.; and Katyal, C. 2025. Ovi: Twin
+Kvochko, A.; Berkowitz, A.; Shalem, D.; Lifschitz, D.;             Backbone Cross-Modal Fusion for Audio-Video Generation.
+Moshe, D.; Porat, E.; Richardson, E.; Shiran, G.; Chachy,          arXiv:2510.01284.
+I.; Chetboun, J.; Finkelson, M.; Kupchick, M.; Zabari, N.;         McAuliffe, M.; Socolof, M.; Mihuc, S.; Wagner, M.; and
+Guetta, N.; Kotler, N.; Bibi, O.; Gordon, O.; Panet, P.; Benita,   Sonderegger, M. 2017. Montreal Forced Aligner: Trainable
+R.; Armon, S.; Kulikov, V.; Inger, Y.; Shiftan, Y.; Melumian,      Text-Speech Alignment Using Kaldi. In Interspeech 2017,
+Z.; and Farbman, Z. 2026. LTX-2: Efficient Joint Audio-            498–502.
+Visual Foundation Model. arXiv:2601.03233.                         Mittag, G.; Naderi, B.; Chehadi, A.; and Möller, S. 2021.
+Huang, X.; Li, Z.; He, G.; Zhou, M.; and Shechtman, E. 2025.       NISQA: A Deep CNN-Self-Attention Model for Multidi-
+Self Forcing: Bridging the Train-Test Gap in Autoregressive        mensional Speech Quality Prediction with Crowdsourced
+Video Diffusion. arXiv:2506.08009.                                 Datasets. In Interspeech 2021, 2127–2131.
+Huang, Y.; Ge, X.; Gong, R.; Lv, C.; and Zhang, J. 2026a.          Radford, A.; Kim, J. W.; Xu, T.; Brockman, G.; McLeavey,
+LinVideo: A Post-Training Framework towards O(n) Atten-            C.; and Sutskever, I. 2022. Robust Speech Recognition via
+tion in Efficient Video Generation. arXiv:2510.08318.              Large-Scale Weak Supervision. arXiv:2212.04356.
+Huang, Y.; Gong, R.; Liu, J.; Ding, Y.; Lv, C.; Qin, H.; and       Reddy, C. K. A.; Gopal, V.; and Cutler, R. 2022. DNSMOS
+Zhang, J. 2026b. QVGen: Pushing the Limit of Quantized             P.835: A Non-Intrusive Perceptual Objective Speech Quality
+Video Generative Models. arXiv:2505.11497.                         Metric to Evaluate Noise Suppressors. arXiv:2110.01763.
+Ruan, L.; Ma, Y.; Yang, H.; He, H.; Liu, B.; Fu, J.; Yuan,           Yang, S.; Kong, Z.; Gao, F.; Cheng, M.; Liu, X.; Zhang, Y.;
+N. J.; Jin, Q.; and Guo, B. 2023. MM-Diffusion: Learning             Kang, Z.; Luo, W.; Cai, X.; He, R.; and Wei, X. 2025b. In-
+Multi-Modal Diffusion Models for Joint Audio and Video               finiteTalk: Audio-driven Video Generation for Sparse-Frame
+Generation. arXiv:2212.09478.                                        Video Dubbing. arXiv:2508.14033.
+Saeki, T.; Xin, D.; Nakata, W.; Koriyama, T.; Takamichi, S.;         Yin, T.; Gharbi, M.; Zhang, R.; Shechtman, E.; Durand, F.;
+and Saruwatari, H. 2022. UTMOS: UTokyo-SaruLab System                Freeman, W. T.; and Park, T. 2024. One-step Diffusion with
+for VoiceMOS Challenge 2022. arXiv:2204.02152.                       Distribution Matching Distillation. arXiv:2311.18828.
+Shen, L.; Qiao, Q.; Yu, T.; Zhou, K.; Yu, T.; Zhan,                  Yin, T.; Zhang, Q.; Zhang, R.; Freeman, W. T.; Durand,
+Y.; Wang, Z.; Tao, M.; Yin, S.; and Liu, S. 2025.                    F.; Shechtman, E.; and Huang, X. 2025. From Slow Bidi-
+SoulX-FlashTalk: Real-Time Infinite Streaming of Audio-              rectional to Fast Autoregressive Video Diffusion Models.
+Driven Avatars via Self-Correcting Bidirectional Distilla-           arXiv:2412.07772.
+tion. arXiv:2512.23379.                                              Zhao, J.; Wei, F.; Liu, Z.; Zhang, H.; Xu, C.; and Lu, Y. 2025.
+SII-GAIR; ai, S.; Chern, E.; Teng, H.; Sun, H.; Wang, H.;            Spatia: Video Generation with Updatable Spatial Memory.
+Pan, H.; Jia, H.; Su, J.; Li, J.; Yu, J.; Liu, L.; Li, L.; Ye, L.;   arXiv:2512.15716.
+Hu, M.; Wang, Q.; Qi, Q.; Chern, S.; Bu, T.; Wang, T.; Xu,           Zhen, D.; Yin, S.; Qin, S.; Yi, H.; Zhang, Z.; Liu, S.; Qi,
+T.; Zhang, T.; Mi, T.; Xu, W.; Zhang, W.; Zhang, W.; Yi, X.;         G.; and Tao, M. 2025. Teller: Real-Time Streaming Audio-
+Cai, X.; Kang, X.; Ma, Y.; Liu, Y.; Zhang, Y.; Huang, Y.;            Driven Portrait Animation with Autoregressive Motion Gen-
+Lin, Y.; Tao, Z.; Liu, Z.; Zhang, Z.; Cen, Z.; Yu, Z.; Wang,         eration. arXiv:2503.18429.
+Z.; Hu, Z.; Zhou, Z.; Guo, Z.; Cao, Y.; and Liu, P. 2026.
+                                                                     Zheng, D.; Huang, Z.; Liu, H.; Zou, K.; He, Y.; Zhang, F.;
+Speed by Simplicity: A Single-Stream Architecture for Fast
+                                                                     Gu, L.; Zhang, Y.; He, J.; Zheng, W.-S.; Qiao, Y.; and Liu,
+Audio-Video Generative Foundation Model. arXiv preprint
+                                                                     Z. 2025. VBench-2.0: Advancing Video Generation Bench-
+arXiv:2603.21986.
+                                                                     mark Suite for Intrinsic Faithfulness. arXiv:2503.21755.
+Su, Y.; Li, Y.; Xue, Z.; Huang, J.; Fu, S.; Li, H.; Li,
+                                                                     Zhu, L.; Huang, Y.; Ge, X.; Xue, Y.; Liu, Z.; Zhang, Y.; Lin,
+Y.; Qian, Z.; Huang, H.; and Duan, N. 2026. OmniForc-
+                                                                     Z.; and Zhang, J. 2026. Flash-VAED: Plug-and-Play VAE
+ing: Unleashing Real-time Joint Audio-Visual Generation.
+                                                                     Decoders for Efficient Video Generation. arXiv:2602.19161.
+arXiv:2603.11647.
+Tian, L.; Wang, Q.; Zhang, B.; and Bo, L. 2024. EMO: Emote
+Portrait Alive – Generating Expressive Portrait Videos with
+Audio2Video Diffusion Model under Weak Conditions.
+arXiv:2402.17485.
+Tu, S.; Pan, Y.; Huang, Y.; Han, X.; Xing, Z.; Dai, Q.; Luo, C.;
+Wu, Z.; and Jiang, Y.-G. 2025. StableAvatar: Infinite-Length
+Audio-Driven Avatar Video Generation. arXiv:2508.08248.
+Wan, T.; Wang, A.; Ai, B.; Wen, B.; Mao, C.; Xie, C.-W.;
+Chen, D.; Yu, F.; Zhao, H.; Yang, J.; Zeng, J.; Wang, J.;
+Zhang, J.; Zhou, J.; Wang, J.; Chen, J.; Zhu, K.; Zhao, K.;
+Yan, K.; Huang, L.; Feng, M.; Zhang, N.; Li, P.; Wu, P.;
+Chu, R.; Feng, R.; Zhang, S.; Sun, S.; Fang, T.; Wang, T.;
+Gui, T.; Weng, T.; Shen, T.; Lin, W.; Wang, W.; Wang, W.;
+Zhou, W.; Wang, W.; Shen, W.; Yu, W.; Shi, X.; Huang, X.;
+Xu, X.; Kou, Y.; Lv, Y.; Li, Y.; Liu, Y.; Wang, Y.; Zhang,
+Y.; Huang, Y.; Li, Y.; Wu, Y.; Liu, Y.; Pan, Y.; Zheng, Y.;
+Hong, Y.; Shi, Y.; Feng, Y.; Jiang, Z.; Han, Z.; Wu, Z.-F.; and
+Liu, Z. 2025. Wan: Open and Advanced Large-Scale Video
+Generative Models. arXiv:2503.20314.
+Xu, M.; Li, H.; Su, Q.; Shang, H.; Zhang, L.; Liu, C.;
+Wang, J.; Yao, Y.; and Zhu, S. 2024a. Hallo: Hierarchical
+Audio-Driven Visual Synthesis for Portrait Image Anima-
+tion. arXiv:2406.08801.
+Xu, S.; Chen, G.; Guo, Y.-X.; Yang, J.; Li, C.; Zang, Z.;
+Zhang, Y.; Tong, X.; and Guo, B. 2024b. VASA-1: Life-
+like Audio-Driven Talking Faces Generated in Real Time.
+arXiv:2404.10667.
+Yang, S.; Huang, W.; Chu, R.; Xiao, Y.; Zhao, Y.; Wang,
+X.; Li, M.; Xie, E.; Chen, Y.; Lu, Y.; Han, S.; and Chen, Y.
+2025a. LongLive: Real-time Interactive Long Video Gener-
+ation. arXiv:2509.22622.
+Hallo-Live OmniForcing
+Ours
+Hallo-Live OmniForcing
+Ours
+Hallo-Live OmniForcing
+Ours                     Additional Qualitative Comparisons on 60-Second Avatar Generation
+
+
+
+
+    Figure 5: Additional qualitative comparisons on 60-second avatar generation. Omni-LiveAvatar maintains consistent avatar and
+    background appearance and accurate audio-video synchronization throughout minute-long generation.
+                        Ours   Hallo-Live OmniForcing   Ours   Hallo-Live OmniForcing   Ours   Hallo-Live OmniForcing
+
+
+
+
+Figure 5 (continued).
+

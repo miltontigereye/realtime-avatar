@@ -1,0 +1,1278 @@
+                                                   EmbodiedHead: Real-Time Listening and
+                                                  Speaking Avatar for Conversational Agents
+
+                                                                        ∗                     ∗                      †
+                                                          Yu Zhang1         , Kaiyuan Shen1       , and Yang Li1,2
+                                              1
+                                                  School of Computer Science and Technology, East China Normal University,
+                                                                             Shanghai, China
+                                                   {51275900029,51285900014}@stu.ecnu.edu.cn, yli@cs.ecnu.edu.cn
+arXiv:2604.17211v2 [cs.CV] 12 Oct 2026
+
+
+
+
+                                                                2
+                                                                   Garabido Intelligence, Shanghai, China
+
+
+                                                          https://vpx-ecnu.github.io/EmbodiedHead-Website/
+
+
+                                                   Abstract. We present EmbodiedHead, a speech-driven talking head
+                                                   framework that equips LLMs with real-time visual avatars for conver-
+                                                   sation. A practical embodied avatar must achieve real-time generation,
+                                                   unified listening-speaking behavior, and high rendered visual quality si-
+                                                   multaneously. Our framework couples the first Rectified-Flow Diffusion
+                                                   Transformer (DiT) for this task with a differentiable renderer, enabling
+                                                   diverse, high-fidelity generation in as few as four sampling steps. Prior
+                                                   listening-speaking methods rely on dual-stream audio, introducing an in-
+                                                   terlocutor look-ahead dependency incompatible with causal user–LLM
+                                                   interaction. We instead adopt a single-stream interface with explicit
+                                                   per-frame listening-speaking state conditioning and a Streaming Audio
+                                                   Scheduler, suppressing spurious mouth motion during listening while en-
+                                                   abling seamless turn-taking. A two-stage training scheme of coefficient-
+                                                   space pretraining and joint image-domain refinement further closes the
+                                                   gap between motion-level supervision and rendered quality. Extensive ex-
+                                                   periments demonstrate state-of-the-art visual quality and motion fidelity
+                                                   in both speaking and listening scenarios.
+
+                                                   Keywords: Speech-driven 3D Talking Head Generation · Rectified Flow
+                                                   · Embodied Conversational Agent
+
+
+                                         1        Introduction
+                                         Large Language Models (LLMs) are now widely used for daily chat and assis-
+                                         tance, but most systems still interact through plain text or voice. Without a
+                                         visible face, users miss social cues such as eye contact, facial expression, and
+                                         head motion that convey attention, emotion, and turn-taking. Embodied Social
+                                         Presence (ESP) Theory argues that an embodied representation (e.g., an avatar)
+                                         becomes the focal point through which people experience co-presence and inter-
+                                         pret social interaction; richer embodied cues strengthen perceived social presence
+                                         and engagement in mediated communication [24].
+                                         ∗
+                                             Equal contribution.
+                                         †
+                                             Corresponding author.
+2        Zhang et al.
+
+                                                              Dual-Audio (train)
+            Agent(speak)
+
+
+
+                                                  Reference   Dual-Audio (real-world)
+                                                                                                  ❌
+
+
+
+
+                    +++++++----
+                                                                                        Unknown
+
+    Scheduler                             EmbodiedHead
+                                                              Ours(real-world)
+                State             Audio                                                ✅ Adaptive Select
+                                                                                                T+1(b)
+                                                History
+                                                                                 T-1
+
+            User(listen)
+                                                                                           T    T+1(a)
+
+
+
+Fig. 1: We present EmbodiedHead, which generates a real-time head-embodied avatar
+for LLMs. Unlike dual-audio methods, it uses a single audio stream with explicit
+listening-speaking state conditioning to achieve unified conversational behavior.
+
+
+
+    In this paper we study Head-Embodied LLMs: equipping an LLM with a
+head-only visual avatar that listens and speaks in real time during conversa-
+tion. A practical head-embodied LLM avatar must meet three goals at once:
+(i) real-time generation to support natural turn-taking; (ii) unified listening-
+speaking behavior to provide role-aware nonverbal signaling throughout the full
+interaction rather than only during speech; and (iii) high rendered visual quality
+to ensure perceptual plausibility and prevent visual artifacts from undermining
+credibility and social presence. Compared to 2D-based methods [10, 16], 3D-
+based methods [6, 11, 35, 41] generally enable lower inference cost, making them
+a promising route toward Head-Embodied LLMs.
+    Most current listening-speaking integrated methods [3, 8, 28, 46] employ a
+dual-stream audio architecture, whose datasets suffer from limited diversity in
+languages and scenarios. More importantly, dual-stream conditioning introduces
+an interlocutor look-ahead dependency: generating the current avatar response
+requires the interlocutor’s reactive audio or visual feedback within the same win-
+dow, which is not available at inference time in user–LLM interactions. Conse-
+quently, the model cannot reliably leverage cross-stream cues in a causal setting,
+and the dual-stream design may collapse into an effectively single-audio, alter-
+nately driven paradigm. Beyond the interaction architecture, most 3D talking-
+head methods treat mesh generation and image rendering as two separate steps.
+Motion is trained and evaluated in coefficient space, so the reported speed and
+quality numbers do not reflect the rendered visual quality that a head-embodied
+LLM avatar actually delivers to the user.
+    To address these issues, we propose EmbodiedHead, an end-to-end speech-
+driven talking-head framework designed for head-embodied LLMs (Fig. 1). Our
+pipeline couples the first Rectified-Flow [22] Diffusion Transformer (DiT) [4, 27]
+for this task with a differentiable renderer, retaining diffusion-model diversity
+while enabling high-fidelity generation in as few as four sampling steps. To re-
+move the interlocutor look-ahead dependency, we adopt a single-stream audio
+                                                             EmbodiedHead         3
+
+interface and inject an explicit per-frame listening-speaking state (LS-state) into
+both the model input and the audio cross-attention via FiLM modulation [29],
+giving the model a clear mode signal at every frame. A Streaming Audio Sched-
+uler merges microphone and LLM audio into a unified window and emits aligned
+LS-states, enabling rapid turn-taking without future information. To close the
+gap between coefficient-space supervision and rendered quality, we adopt a two-
+stage training scheme: the DiT is first pretrained with flow matching in co-
+efficient space for stable dynamics, then jointly fine-tuned with the renderer
+using image-domain losses. The straight-path property of Rectified Flow sup-
+ports reliable one-step endpoint estimation, making this joint optimization both
+well-grounded and efficient.
+     Overall, the contributions of this paper can be summarized as follows:
+    • We propose an end-to-end framework coupling a Rectified-Flow DiT with
+      a differentiable renderer and multi-level conditioning, achieving real-time,
+      diverse talking-head generation in few sampling steps.
+    • We enable unified listening-speaking behavior via explicit LS-state condi-
+      tioning and a Streaming Audio Scheduler, suppressing listening-phase mouth
+      hallucinations and supporting rapid turn-taking.
+    • A two-stage scheme jointly optimizes the DiT and renderer with image-
+      domain supervision, closing the gap between coefficient-space training and
+      rendered quality. Extensive experiments demonstrate state-of-the-art perfor-
+      mance in both speaking and listening scenarios.
+
+
+2      Related Work
+2.1     Speech-driven 3D Talking Head Generation
+Most work in speech-driven 3D talking-head generation follows a two-stage
+pipeline: a motion model generates 3D motion from audio, which is then rendered
+by a separate module [9, 11, 35, 41]. VOCA [9] established identity-decoupled re-
+gression from speech. FaceFormer [11] and CodeTalker [41] introduced Trans-
+former modeling and discrete motion priors to improve lip sync and motion
+diversity. DiffPoseTalk [35] applied diffusion for style-conditioned generation,
+while ARTalk [6] and GLDiTalker [20] target real-time output via autoregressive
+codebooks and latent diffusion. Despite these advances, training and evaluation
+stay in coefficient space: the reported accuracy and speed reflect mesh-level per-
+formance, not the rendered visual quality that users actually perceive.
+    A parallel line of work bypasses parametric models and drives a per-identity
+neural scene directly with audio, using either NeRF [13, 18, 25] or 3D Gaussian
+Splatting [1, 17]. These methods can capture fine appearance details, but the
+reconstructed scene is largely static: motion is limited to the lip region while
+eye movement, head pose, and lighting variation are poorly handled, yielding a
+rigid and visually flat result. Per-identity scene reconstruction also adds a costly
+setup stage, reducing suitability for general head-embodied LLM deployment.
+Some 2D methods learn a direct mapping from audio to images and achieve
+4       Zhang et al.
+
+high rendered quality [10, 16], but their generation speed is too slow for real-
+time head-embodied LLM interaction.
+
+2.2   Listening-Speaking Integrated 3D Avatar Generation
+Unified listening-speaking generation has evolved from single-listener modeling
+toward multi-turn streaming frameworks [3, 8, 26, 28, 32, 37, 46]. Learning to Lis-
+ten [26] modeled stochastic 3D listener responses but did not address multi-
+turn dialogue. DualTalk [28] extended this to multi-round conversations un-
+der a dual-stream setting, but processes complete audio sequences offline and
+generates outputs in a single pass, making streaming deployment infeasible.
+TIMAR [3] introduced turn-level causal modeling to address latency, yet re-
+lies on the interlocutor’s visual stream as input, which adds extra acquisition
+cost in real-time scenarios. INFP [47] and UniLS [8] further improved natural-
+ness and continuity under dual-stream audio settings. Despite this progress, all
+dual-stream methods share a common structural limitation: generating the cur-
+rent window requires the interlocutor’s reactive audio for the same span, which
+is unavailable in real user–LLM chat. This interlocutor look-ahead dependency
+makes dual-stream conditioning incompatible with causal streaming inference,
+and in practice these methods tend to degrade into alternated single-audio driv-
+ing with unreliable mode inference during listening phases. MANGO [46] recog-
+nized the value of image-domain supervision and introduced 2D-lifted training
+alongside dual-stream audio. However, MANGO is built on DDPM [14], which
+requires many sampling steps to produce reliable outputs. Single-step estimates
+from DDPM carry large approximation errors, so image-domain losses cannot be
+grounded in outputs that match actual inference behavior, limiting the practical
+effect of the image supervision.
+
+3     Method
+Fig. 2 provides an overview of EmbodiedHead. After formalizing the task and
+introducing Rectified Flow (Sec. 3.1), we detail the injection of multiple condi-
+tions into DiT blocks (Sec. 3.2). To unify speaking and listening behaviors in
+conversational streams, we then propose a listening-speaking state (Sec. 3.3),
+culminating in a two-stage training scheme for end-to-end image-domain refine-
+ment (Sec. 3.4).
+
+3.1   Preliminaries
+Given an input audio segment a, we aim to generate a temporally coherent 3D
+motion sequence x1 ∈ RT ×D for a streaming window of length T frames. We use
+c to denote the full set of conditioning variables.
+    We use FLAME [19] to represent facial geometry, parameterizing each frame
+by an expression vector eτ ∈ R100 and a pose vector pτ for τ ∈ {1, . . . , T }, with
+a shared identity shape s ∈ R300 . The per-frame motion vector is defined as
+                         \mathbf {x}_1^{\tau } = [\mathbf {e}^{\tau },\;\mathbf {p}^{\tau }],\qquad D=100+\dim (\mathbf {p}^{\tau }).    (1)
+                                                                                                                                                                                                                           EmbodiedHead                                 5
+
+        Condition flow
+                                                    Refer               Magnitude Timestep                                                   Audio                           LS-state
+        Noise flow
+        History flow                                                                                                                                                      +++++---
+                                                                                                                                                                          +++++ ---
+                                                                                                                                                                                                                                     Streaming Audio Scheduler
+        Grad flow
+        Frozen parameters                                                                                                                                                                                                            LLM(Speak)          User(Listen)
+             History
+                                                                             AdaLN
+
+                    --+++++
+                    --
+                                                                                                                                               FiLM                                                                                           Schedule
+                       +++++
+                                HCP
+                                                                                                                                                                                Stage Ⅱ              Image
+
+                                                                                                                                                                                                      Loss
+
+
+
+
+                                                       Self Attn
+  ...
+
+
+
+
+                                      Linear
+
+
+
+
+                                                                                  Audio Attn
+
+
+                                                                                                             FFN
+                    +++++---
+                    +++++
+
+
+
+
+                                                                                                                                 Linear
+                                                                                                                                                                                                                                              +++++---
+                                                                                                                                                                                                                                              +++++ ---
+                                                                                                                                                                            R
+                          ---
+
+
+
+
+              Noise                                                                                                       ×N
+
+
+
+Fig. 2: EmbodiedHead employs a Rectified-Flow DiT to generate speech-driven
+talking-head animation in few steps. It conditions on reference, timestep, motion mag-
+nitude, and LS-state. A streaming scheduler merges user–LLM audio, enabling unified
+listening-speaking.
+
+
+
+   We adopt Rectified Flow [22] to retain the diversity of diffusion models while
+reducing sampling steps. Let x1 be a data sample and x0 ∼ N (0, I) be Gaussian
+noise. Rectified Flow defines a straight interpolation path
+
+                                                   \mathbf {x}_t = \mathbf {x}_0 + t\,(\mathbf {x}_1-\mathbf {x}_0),\qquad t\sim \mathcal {U}[0,1]. \label {eq:rf_path}                                                                                            (2)
+
+Along this path, the target velocity is a constant vector ut = dx     dt = x1 − x0 .
+                                                                        t
+
+
+We train a conditional velocity field vθ (xt , t, c) by minimizing the flow-matching
+objective [21]
+                                                 \mathcal {L}_{\mathrm {FM}} = \mathbb {E}\Big [\big \|\mathbf {v}_\theta (\mathbf {x}_t,t,\mathbf {c})-(\mathbf {x}_1-\mathbf {x}_0)\big \|_2^2\Big ]. \label {eq:fm_loss}                                        (3)
+
+
+3.2     Multi-Condition Rectified-Flow DiT
+
+We parameterize vθ with a DiT to model the conditional velocity field. The
+condition is instantiated as c = (a, s, xref , xhist , q, m), where xref and s rep-
+resent the reference frame, xhist denotes history FLAME parameters, q is the
+per-frame listening-speaking state (Sec. 3.3) and m controls normalized rota-
+tion/translation magnitudes. To inject these conditions in a stable and control-
+lable manner, we adopt three complementary pathways.
+
+
+Model input. We build a single sequence of motion tokens by concatenating
+a history FLAME xhist ∈ RL×D and the current noisy window xt ∈ RT ×D , and
+explicitly append the listening-speaking state q = [qhist , qcur ] ∈ {−1, +1}L+T
+as an extra channel to every frame feature. Given the flow time t, we form
+augmented frame features by channel-wise concatenation
+
+                                                 \tilde {\mathbf {x}}^{\mathrm {hist}}=[\mathbf {x}^{\mathrm {hist}},\mathbf {q}^{\mathrm {hist}}],\qquad \tilde {\mathbf {x}}_{t}=[\mathbf {x}_{t},\mathbf {q}^{\mathrm {cur}}].                                  (4)
+6       Zhang et al.
+
+Inspired by [44], we propose History Context Packing (HCP) to efficiently encode
+long-range context: x̃hist is partitioned into G groups of exponentially growing
+temporal spans, and each group is compressed into a fixed number of tokens via
+a learnable linear projection, yielding h̃ ∈ RH×(D+1) . Finally, we concatenate
+these packed history tokens with the current tokens and project them to the
+transformer dimension: Z0 = Linear([h̃, x̃t ]) ∈ R(H+T )×d .
+
+Frame-level audio attention. We use mHuBERT [15, 43] as our speech en-
+coder, fusing all hidden layers with learnable softmax weights, and inject frame-
+level audio features into the noise via cross-attention. Notably, in each DiT
+block, the self-attention layer runs over all (H + T ) motion tokens, while the
+audio cross-attention layer is applied only to the T current-window tokens.
+    To help the model interpret the audio source, we apply a state-conditioned
+FiLM modulation [29] to audio features before cross-attention:
+                           \hat {\mathbf {A}}^{\tau }=\mathbf {A}^{\tau }\odot \big (1+\boldsymbol {\alpha }(q^{\tau })\big )+\boldsymbol {\beta }(q^{\tau }),    (5)
+where [α(q τ ), β(q τ )] ∈ R2D is produced by a lightweight zero-initialized MLP.
+Each transformer block has its own modulation parameters, while parameters
+are shared across time steps within a block. For temporal alignment, we also
+use a diagonal locality mask in cross-attention: Mi,j = 0 if |i − j| ≤ R, and
+Mi,j = −∞ otherwise, where R=2 frames.
+
+Global conditioning via AdaLN. Following mainstream DiT paradigms [4,
+27], we introduce global conditioning through AdaLN [42]. Specifically, a uni-
+fied global conditioning vector is constructed by concatenating: (i) the flow
+timestep embedding t, (ii) a reference embedding from shape and reference
+motion ([s, xref ]), (iii) a mean-pooled global audio embedding computed over
+current-window audio tokens only, using a separate set of learnable layer-fusion
+weights independent of those used in cross-attention, and (iv) the motion mag-
+nitude guidance m = [mr , mt ] ∈ [0, 1]2 .
+    To mitigate over-averaging caused by weak audio-motion correlation, we
+explicitly inject motion magnitude, which offers superior interpretability and
+practical utility over implicit style features [6, 35]. During training, mr , mt are
+computed from the ground-truth target window as the mean successive-frame
+rotational displacement (SO(3) geodesic angle) and translational displacement
+magnitude, and then normalized to [0, 1].
+
+3.3   Listening-Speaking State Conditioning
+As discussed in Sec. 1, dual-stream audio conditioning is ill-suited for causal
+user–LLM interaction because future user audio is unavailable. We therefore
+adopt a single-stream conditioning interface and explicitly represent the behav-
+ioral mode with a per-frame listening-speaking state (LS-state). Training uses
+a unified single-stream waveform with aligned LS-state supervision. At infer-
+ence time, a Streaming Audio Scheduler causally maps the microphone stream
+                                                                                                                 EmbodiedHead                            7
+
+Algorithm 1 Streaming audio scheduler
+Require: Listening queue QL , Speaking queue QS , cursors (cL , cS ), previous mode
+    mprev , window length T
+Ensure: Waveform a and LS-state q ∈ {−1, +1}T
+ 1: U ← GetUnconsumedLength(QS , cS ) \triangleright  unconsumed frames in speaking queue
+ 2: if U ≥ T then                                                         \triangleright  speaking queue alone fills the window
+ 3:     a ← SliceHead(QS , cS , T ); q ← +1T
+ 4:     cS ← cS + T ; mprev ← speak
+ 5: else if U > 0 then               \triangleright  partial Speak: fill remainder with listening tail
+ 6:     xS ← SliceHead(QS , cS , U ); xL ← SliceTail(QL , T − U )
+ 7:     a ← (mprev = speak) ? xS ∥xL : xL ∥xS                                                    \triangleright  preserve temporal continuity
+ 8:     q ← LabelBySource(a); cS ← cS + U
+ 9:     mprev ← (mprev = speak) ? listen : speak                                                                     \triangleright  track window tail state
+10: else                                                   \triangleright  no pending Speak: pure listening mode
+11:     a ← SliceTail(QL , T ); q ← −1T ; mprev ← listen
+12: end if
+13: return (a, q)
+
+
+
+and the LLM stream to the same conditioning window and outputs the aligned
+LS-state.
+
+
+LS-state definition and acquisition. We define q τ ∈ {−1, +1} with +1 for
+speaking and −1 for listening, and denote the window state as q ∈ {−1, +1}T .
+During training, we run TalkNet-ASD [36] on each video to obtain a frame-level
+speaking confidence, apply a short temporal smoothing to suppress jitter, and
+then binarize it into q. During inference, q is constructed from audio provenance:
+frames sourced from LLM are labeled speaking (+1), while frames sourced from
+the environment are labeled listening (−1).
+
+
+LS-state injection. We inject q through two mechanisms described in Sec. 3.2.
+We concatenate q τ to each motion token in the history and current window.
+This provides an explicit mode indicator at the input representation and yields a
+mode-consistent temporal context. We apply a state-conditioned FiLM to frame-
+level audio features before cross-attention in each DiT block. This maintains the
+conditioning signal throughout the network depth.
+
+
+Streaming Audio Scheduler. We maintain two audio queues: QL as a rolling
+buffer (microphone) and QS as a monotonically consumed queue. At each tick,
+we output a fixed-length window of T frames by prioritizing unconsumed samples
+in QS and filling any deficit with the most recent context from QL . When both
+sources appear within one window, we order the two segments using the previ-
+ous window’s tail mode mprev to reduce boundary discontinuities; q is emitted
+alongside a by labeling each frame by its source (Alg. 1).
+8              Zhang et al.
+
+3.4         Two-Stage Training
+
+The FLAME parameters estimated from monocular videos are inevitably noisy
+and biased, especially in frames with occlusion, motion blur, or extreme pose,
+where tracker confidence is low. Pure coefficient-space supervision therefore forces
+the model to fit unreliable targets that are not always consistent with image ev-
+idence. We thus adopt a two-stage strategy: coefficient pretraining for stable
+dynamics, followed by end-to-end image refinement for bias correction.
+
+
+Stage I: Coefficient-space pretraining. We partition the per-frame motion
+vector xτ1 = [eτ , pτ ] into five parameter groups K (expression, jaw, eye, rotation,
+and translation) and optimize flow matching with per-group reweighting. The
+Stage-I objective is
+
+                             \mathcal {L}_{\mathrm {I}} = \sum _{k\in \mathcal {K}} \lambda _k \left \| \mathbf {v}_{\theta }^{(k)}-(\mathbf {x}_1^{(k)}-\mathbf {x}_0^{(k)}) \right \|_2^2 + \lambda _{\mathrm {smooth}}\,\mathcal {L}_{\mathrm {smooth}}^{\mathrm {pose}}. \label {eq:stage1_compact}    (6)
+
+
+Lpose             τ +1
+                       − pτ ∥22 is applied only to rotation and translation dimen-
+           P
+  smooth =   τ ∥p
+sions to suppress jitter from video cuts and tracking instability; expression and
+jaw are excluded to avoid over-smoothing lip articulation.
+
+
+Stage II: End-to-end image refinement. For image-domain refinement, we
+use GAGAvatar [7] as the differentiable renderer. While it renders fewer facial de-
+tails than high-fidelity avatar pipelines [30], its single-image avatar construction
+makes end-to-end fine-tuning practical on large-scale 2D video datasets. More-
+over, GAGAvatar explicitly models intra-oral regions (e.g., teeth and tongue),
+which is crucial for realistic speech appearance. In Stage II, we unfreeze the ren-
+derer and jointly optimize both the DiT and differentiable renderer parameters
+with image-domain losses, allowing the renderer to co-adapt to the generated
+motion distribution.
+    Using Rectified Flow, we can estimate the endpoint with a single Euler up-
+date,
+                              \hat {\mathbf {x}}_1 \approx \mathbf {x}_t + (1-t)\,\mathbf {v}_\theta (\mathbf {x}_t,t,\mathbf {c}), \label {eq:stage2_onestep}  (7)
+where xt is sampled by Eq. (2). The straight path has a constant target velocity,
+so flow matching learns a displacement field; consequently, the inference step
+(setting t=0) coincides with the rendered endpoint, and image losses supervise
+exactly what will be sampled.
+    We then render the reconstructed endpoint with GAGAvatar Î = R(x̂1 , s),
+and apply image-domain losses to jointly refine both the motion model and the
+renderer,
+
+                           \mathcal {L}_{\mathrm {II}}= \lambda _{\mathrm {coef}}\,\mathcal {L}_{\mathrm {I}}+ \lambda _{\mathrm {img}} \Big (\lambda _{1}\|\hat {\mathbf {I}}-\mathbf {I}\|_{1}+\lambda _{p}\|\psi (\hat {\mathbf {I}})-\psi (\mathbf {I})\|_2^2\Big ), \label {eq:stage2_loss}           (8)
+
+where ψ(·) is a frozen AlexNet-based LPIPS perceptual feature extractor [45].
+                                                             EmbodiedHead         9
+
+4     Experiments
+
+4.1   Experimental Setup
+
+Datasets. To ensure the robustness and generalization of our proposed model,
+we curated a diverse dataset comprising 11,372 samples, totaling 27.2 hours
+of footage. The primary data source is filtered from the TFHP dataset [35],
+contributing 14.7 hours. To enhance linguistic and environmental diversity, we
+integrated 7.8 hours of data from the TalkVid [5] and VFHQ [40] datasets. We
+additionally curated 3.9 hours of segments from the RealTalk dataset [12] to
+specifically model listening behaviors. We extract 3D FLAME parameters from
+videos using the GAGAvatar [7] tracking pipeline. For evaluation, we randomly
+sample 100 speaking clips and 50 listening clips as the test set.
+
+
+Implementation Details. For the audio condition, we adopt mHuBERT-
+147 [15, 43] for multilingual adaptation. The motion branch predicts FLAME
+parameters over a 100-frame window, with 75 historical motion frames com-
+pressed into 20 frames using HCP. We train the model in two stages on two
+NVIDIA RTX 3090 GPUs: 80K iterations with lr=6e-4 and batch size 64, fol-
+lowed by 150K iterations with lr=8e-5 and batch size 4. During inference, we
+use 4-step Euler integration and set the motion-magnitude guidance to 0.3. More
+details are in the supplementary materials.
+
+
+Baselines. To comprehensively evaluate EmbodiedHead, we select state-of-the-
+art baselines across two distinct tracks. For standard speech-driven motion gen-
+eration, we compare our method with FaceFormer [11], CodeTalker [41], Diff-
+PoseTalk [35], and ARTalk [6]. To explicitly assess interactive conversational dy-
+namics, we benchmark against DualTalk [28], UniLS [8], and TIMAR [3], which
+are recent frameworks for unified listening-and-speaking motion generation. For
+visualization and image-domain evaluation, all baselines are rendered using the
+GAGAvatar [7].
+
+
+4.2   Quantitative Evaluation
+
+Metrics. Our evaluation metrics are organized around the three core objec-
+tives of a head-embodied LLM avatar. For high visual quality, we adopt standard
+image-domain metrics: PSNR, SSIM [39], and LPIPS [45], which directly reflect
+the rendered fidelity perceived by users. For motion fidelity and listening-speaking
+behavior, we use LVE [31] and MOD [41] for lip synchronization, FDD [41] for
+upper-face naturalness, BA [33] for head-motion rhythmic synchronization, and
+SID [28] for generation diversity. Real-time efficiency is evaluated by the gener-
+ation speed measured in frames per second (FPS).
+10      Zhang et al.
+
+Table 1: Quantitative comparisons of 2D visual quality and 3D motion generation
+against baselines. The upper part reports on the EmbodiedHead speaking test set to
+evaluate standard speaking ability; BA is inapplicable to FaceFormer and CodeTalker
+because they do not predict head motion. The lower part reports on the public DualTalk
+test set to evaluate interactive listening-speaking ability; image-domain metrics are
+unavailable because the DualTalk test set does not provide ground-truth RGB frames.
+
+ Method                LVE↓ FDD↓ MOD↓ BA↑ SID↑ PSNR↑ SSIM↑ LPIPS↓
+ FaceFormer [11] 11.02         3.46   3.84    −   1.21     17.64    0.605    0.203
+ CodeTalker [41]   10.99       3.09   3.89    −   1.32     17.68    0.607    0.202
+ DiffPoseTalk [35] 10.3        2.69   4.24   0.44 2.01     16.09    0.565    0.268
+ ARTalk [6]         6.86       2.42   3.21   0.46 2.39     16.81    0.579    0.221
+ Ours (Stage1)     5.70        1.66   2.98   0.47 2.64     17.53    0.600    0.199
+ Ours (Stage2)     5.71        1.58   3.04   0.46 2.64     18.28    0.617    0.184
+ DualTalk [28]          7.94   1.95   2.84   0.42 2.47       −        −        −
+ UniLS [8]             12.73   3.04   4.83   0.36 1.57       −        −        −
+ TIMAR [3]              8.02   1.94   2.98   0.41 2.57       −        −        −
+ Ours                  7.18    1.74   2.57   0.39 2.67       −        −        −
+
+
+
+2D Visual Quality Evaluation. A practical head-embodied LLM avatar must
+deliver high rendered visual quality to users. We evaluate the end-to-end ren-
+dered output by routing all methods through the identical render pipeline and
+comparing PSNR, SSIM, and LPIPS on the EmbodiedHead speaking test set
+(Tab. 1, upper). As shown, EmbodiedHead achieves the best performance across
+all metrics, validating the efficacy of our DiT and two-stage training paradigm.
+Unlike previous methods reliant on noise-prone coefficient-space supervision, our
+Rectified Flow formulation enables direct one-step endpoint generation (x̂1 ).
+This property seamlessly facilitates joint fine-tuning of the DiT and renderer in
+the second stage, effectively mitigating tracking biases, leading to superior 2D
+visual outcomes.
+
+
+3D Motion Evaluation. To assess motion fidelity, we evaluate the models
+under two distinct datasets: a standard speaking mode on the EmbodiedHead
+speaking test set, and an interactive listening-speaking mode on the DualTalk
+test set. Quantitative comparisons of 3D motion generation performance are
+summarized in Tab. 1. In the standard speaking mode, EmbodiedHead signif-
+icantly outperforms previous baselines, achieving state-of-the-art results across
+all evaluated metrics. The substantial improvements in LVE and FDD indicate
+that our model captures highly accurate lip articulations and natural upper-face
+dynamics to support realistic rendering. In the interactive listening-speaking
+mode, we train on the DualTalk train split and evaluate on its test set. Despite
+relying on a single audio stream with explicit LS-state conditioning (Sec. 3.3),
+EmbodiedHead surpasses the dual-audio-driven baseline methods in LVE, FDD,
+MOD, and SID. Although DualTalk and TIMAR attain slightly higher BA scores
+                                                                     EmbodiedHead                 11
+
+              Speaking status                                    Listening status
+
+
+
+
+          Shaking head          Smiling     Blinking    Gazing      Nodding          Surprising
+
+
+
+
+Fig. 3: Qualitative examples of natural listening-speaking transitions and conversa-
+tional behaviors.
+
+
+(0.42 and 0.41 vs. 0.39), this likely stems from their use of interlocutor visual
+cues to better capture conversational rhythm.
+
+Real-Time Performance. Real-time generation is a prerequisite for deploying
+a head-embodied LLM avatar in live conversation. Our full pipeline runs in real
+time with GAGAvatar as the renderer, achieving 59 FPS on a single NVIDIA
+RTX 3090 GPU. When measuring only the motion-coefficient generation module,
+our method reaches over 900 FPS, largely enabled by the efficiency of Rectified
+Flow. Compared with other methods, DiffPoseTalk is constrained by its DDPM
+architecture and cannot achieve real-time performance. Although some baselines
+can reach real-time speeds at the motion-coefficient level, none of them explores
+end-to-end image generation, so their reported efficiency does not reflect the
+actual speed of producing the final rendered output.
+
+
+Table 2: User study results. Each value reports the percentage of all pairwise com-
+parisons in which participants preferred our method over the corresponding baseline,
+with ties included.
+
+                                  Overall    Lip-Sync     Listening          Turn-Taking
+           Comparison             Realism    Accuracy    Naturalness         Smoothness
+      Ours vs. DualTalk [28]       89.1%       81.8%         85.5%                  85.0%
+      Ours vs. TIMAR [3]           91.8%       90.9%         86.8%                  87.7%
+      Ours vs. UniLS [8]           76.8%       72.7%         69.5%                  68.6%
+
+
+
+
+4.3    Qualitative Evaluation
+To demonstrate our interactive capabilities, Fig. 3 visualizes the natural listening-
+speaking transitions and conversational behaviors generated by EmbodiedHead.
+12           Zhang et al.
+
+
+
+      I
+
+
+
+
+     what
+
+
+
+
+     back
+
+
+
+
+     支配 
+     /jrr/
+
+
+                   GT image   FaceFormer* CodeTalker*   DiffPoseTalk*      ARTalk          Ours
+
+Fig. 4: Qualitative comparisons of 2D visual quality against other baseline methods on
+the EmbodiedHead speaking test set. * indicates baselines are additionally rendered.
+
+          Speaking
+
+           touching
+
+
+
+
+              up
+
+
+
+          Listening
+
+
+
+
+                         GT image    DualTalk*    TIMAR*          UniLS*            Ours
+
+Fig. 5: Qualitative comparisons of 2D visual quality against interactive baseline meth-
+ods on the DualTalk test set, covering both speaking (upper) and listening (lower)
+statuses. * indicates baselines are additionally rendered.
+
+
+
+Modulated by the explicit LS-state, our model achieves seamless state switch-
+ing without abrupt visual artifacts. Beyond accurate lip synchronization, the
+rendered 2D avatars exhibit rich, context-aware non-verbal dynamics, such as
+                                                              EmbodiedHead        13
+
+Table 3: Ablations on global and listening modules. Upper: global condition ablation;
+lower: listening-speaking module ablation. mag, ref, and audio denote motion magni-
+tude, reference embedding, and audio embedding, respectively.
+
+                Method                LVE↓    FDD↓    MOD↓      BA↑
+                Baseline              5.97     1.70    2.89     0.41
+                  +mag                6.20     1.58    2.96     0.40
+                  +mag+ref            5.84     1.63    2.83     0.42
+                  +mag+ref+audio      5.76     1.55    2.63     0.43
+                Baseline              6.58     1.53    2.43     0.37
+                  +LS-state           6.21     1.46    2.10     0.36
+                  +LS-state+FiLM      6.13     1.46    1.99     0.38
+
+
+
+attentive nodding and blinking during listening, alongside vivid facial expressions
+during speaking. These high-fidelity interactive behaviors significantly enhance
+the realism and engagement of the conversational agent.
+    In standard speaking scenarios (Fig. 4), FaceFormer, CodeTalker, and ARTalk
+often yield restricted mouth amplitudes, failing to fully articulate phonetic de-
+tails. Although DiffPoseTalk exhibits larger motion amplitudes, it still suffers
+from noticeable lip-audio desynchronization. In conversational settings (Fig. 5),
+despite producing rich dynamics, interactive baselines occasionally hallucinate
+unreasonable mouth openings during the “listening” phase. By contrast, equipped
+with an explicit state modulation mechanism, EmbodiedHead effectively sup-
+presses unnatural mouth hallucinations when listening, while ensuring highly
+accurate and expressive lip synchronization when speaking.
+    We conducted a randomized pairwise preference study to evaluate the per-
+ceptual quality of the generated conversational avatars. Our user study focuses
+on interactive listening-speaking baselines, including DualTalk [28], TIMAR [3],
+and UniLS [8], since these methods generate interactive behaviors whose natu-
+ralness is best assessed by human judgment. The study involved 22 voluntary
+participants, each evaluating 48 pairwise comparisons across speaking and listen-
+ing scenarios using four criteria: Overall Realism, Lip-Sync Accuracy, Listening
+Naturalness, and Turn-Taking Smoothness. For each comparison, participants
+selected the better result or indicated a tie. As shown in Tab. 2, our method is
+consistently preferred over all baselines across the four criteria, with preference
+rates of at least 68.6%, demonstrating its perceptual advantages in conversational
+listening-speaking interaction. Further details are provided in the supplementary
+material.
+
+4.4   Ablation Study
+Effect of the Global Condition. We validate the global condition module
+in the top half of Tab. 3. The baseline only uses the timestep condition. Pro-
+gressively adding reference and audio embeddings to AdaLN steadily improves
+14         Zhang et al.
+
+     (a) ＋end2end
+                      GT        GT mesh    w/o image       w/o mesh   w image       w mesh
+
+
+
+
+     (b) ＋LS-state＋FiLM                    (c) ＋motion magnitude [mᵣ, mₜ]
+         GT          w/o         w
+
+
+                                            [0.1, 0.1]
+
+
+
+
+                                            [0.9, 0.9]
+
+
+
+
+Fig. 6: Visual results of ablation studies. (a) The second-stage image-domain super-
+vision improves both rendered quality and mesh geometry. (b) LS-state with FiLM
+modulation suppresses unnatural mouth openings during listening. (c) The motion
+magnitude condition controls head-motion amplitude under the same audio input.
+
+                          Table 4: Ablation on inference-step scheduling.
+
+              Step   LVE↓      FDD↓       MOD↓           BA↑    PSNR↑       SSIM↑      LPIPS↓
+              1      5.80       1.76      2.73           0.48    17.08      0.571       0.204
+              4      5.76       1.55      2.63           0.43    17.29      0.578       0.202
+              10     5.99       1.46      2.67           0.43    17.13      0.573       0.206
+              25     6.18       1.44      2.73           0.41    17.10      0.572       0.208
+
+
+
+all metrics. The motion magnitude condition is defined as m = [mr , mt ], where
+mr and mt denote the normalized rotation and translation amplitudes, respec-
+tively. As shown in Fig. 6(c), small motion magnitude values (e.g., 0.1) yield
+restrained head motions while large values (e.g., 0.9) produce markedly more
+expressive movements, all from the same audio input. This continuous control-
+lability demonstrates effective disentanglement of motion amplitude from the
+driving signal, enhancing both diversity and user-level customizability.
+
+
+Effect of the Listening-Speaking Module. We assess explicit LS-state in-
+jection in the bottom half of Tab. 3, which is the component most directly tied to
+our unified listening-speaking objective. When LS-state conditioning is removed,
+the model attempts to infer conversational states directly from the audio signal.
+As illustrated in Fig. 6(b), it tends to interpret weak or distant speech as a listen-
+                                                             EmbodiedHead        15
+
+ing state, and under uncertain conditions may open its mouth without producing
+clear speaking motions. Adding the state to the model input reduces MOD from
+2.43 to 2.10, and further applying FiLM modulation to cross-attention brings
+it to 1.99, effectively eliminating spurious articulatory artifacts during listening
+and enabling reliable state-dependent behavior.
+
+
+Effect of the Two-Stage Training. We evaluate the impact of the second-
+stage image-domain supervision. As shown in Tab. 1(upper) and Fig. 6(a), this
+strategy significantly enhances 2D visual fidelity. Furthermore, it effectively mit-
+igates inherent tracking noise. For instance, as depicted in the second row of
+Fig. 6(a), our optimized geometry successfully captures subtle, natural mouth
+openings, visually surpassing the tracked pseudo-GT FLAME mesh. This cor-
+roborates our hypothesis that 2D supervision can effectively rectify 3D tracker
+biases.
+
+
+Effect of the Inference Step. Our inference step analysis (Tab. 4) demon-
+strates that the proposed architecture enables high-quality one-step generation.
+Specifically, 1-step inference yields performance highly comparable to the 25-step
+setting. For additional details and ablation results, please refer to the supple-
+mentary material.
+
+
+5   Conclusion
+We presented EmbodiedHead, an end-to-end speech-driven talking-head frame-
+work for head-embodied LLM avatars. By coupling a Rectified-Flow DiT with a
+differentiable renderer, our pipeline achieves 59 FPS on a single GPU with only
+four sampling steps, satisfying the real-time requirement for live conversation.
+Explicit per-frame listening-speaking state conditioning and a Streaming Au-
+dio Scheduler replace the dual-stream paradigm, enabling unified listening and
+speaking behavior without interlocutor look-ahead. A two-stage training strat-
+egy that augments coefficient-space flow matching with image-domain refinement
+further bridges the gap between mesh-level accuracy and rendered visual fidelity.
+Experiments on both our curated dataset and public benchmarks validate state-
+of-the-art performance across motion, rendering, and interaction metrics.
+
+
+Acknowledgements
+This work was supported by the National Natural Science Foundation of China
+(62572194). This article was also supported by the Key Technology Research and
+Development Program Project of the Shanghai Science and Technology Commis-
+sion under Grants (25511107200).
+16      Zhang et al.
+
+References
+ 1. Aneja, S., Sevastopolsky, A., Kirschstein, T., Thies, J., Dai, A., Nießner, M.: Gaus-
+    sianspeech: Audio-driven gaussian avatars (2024), https://arxiv.org/abs/2411.
+    18675
+ 2. Ba, J.L., Kiros, J.R., Hinton, G.E.: Layer normalization. arXiv preprint
+    arXiv:1607.06450 (2016)
+ 3. Chen, J., Wang, F., Huang, Z., Zhou, Q., Li, K., Guo, D., Zhang, L., Yang, X.: To-
+    wards Seamless Interaction: Causal Turn-Level Modeling of Interactive 3D Conver-
+    sational Head Dynamics (2025). https://doi.org/10.48550/arXiv.2512.15340
+ 4. Chen, J., Yu, J., Ge, C., Yao, L., Xie, E., Wu, Y., Wang, Z., Kwok, J., Luo, P.,
+    Lu, H., Li, Z.: Pixart-α: Fast training of diffusion transformer for photorealistic
+    text-to-image synthesis (2023), https://arxiv.org/abs/2310.00426
+ 5. Chen, S., Huang, H., Liu, Y., Ye, Z., Chen, P., Zhu, C., Guan, M., Wang, R., Chen,
+    J., Li, G., et al.: Talkvid: A large-scale diversified dataset for audio-driven talking
+    head synthesis. arXiv preprint arXiv:2508.13618 (2025)
+ 6. Chu, X., Goswami, N., Cui, Z., Wang, H., Harada, T.: ARTalk: Speech-Driven 3D
+    Head Animation via Autoregressive Model (2025). https://doi.org/10.48550/
+    arXiv.2502.20323
+ 7. Chu, X., Harada, T.: Generalizable and animatable gaussian head avatar. Advances
+    in Neural Information Processing Systems 37, 57642–57670 (2024)
+ 8. Chu, X., Liu, R., Huang, Y., Liu, Y., Peng, Y., Zheng, B.: UniLS: End-to-End
+    Audio-Driven Avatars for Unified Listening and Speaking. In: Proceedings of the
+    IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR).
+    pp. 25142–25152 (Jun 2026)
+ 9. Cudeiro, D., Bolkart, T., Laidlaw, C., Ranjan, A., Black, M.J.: Capture, learning,
+    and synthesis of 3d speaking styles. In: Proceedings of the IEEE/CVF Conference
+    on Computer Vision and Pattern Recognition (CVPR) (June 2019)
+10. Cui, J., Li, H., Zhan, Y., Shang, H., Cheng, K., Ma, Y., Mu, S., Zhou, H., Wang, J.,
+    Zhu, S.: Hallo3: Highly dynamic and realistic portrait image animation with video
+    diffusion transformer. In: Proceedings of the IEEE/CVF Conference on Computer
+    Vision and Pattern Recognition (CVPR). pp. 21086–21095 (June 2025)
+11. Fan, Y., Lin, Z., Saito, J., Wang, W., Komura, T.: Faceformer: Speech-driven 3d
+    facial animation with transformers. In: Proceedings of the IEEE/CVF Conference
+    on Computer Vision and Pattern Recognition (CVPR). pp. 18770–18780 (June
+    2022)
+12. Geng, S., Teotia, R., Tendulkar, P., Menon, S., Vondrick, C.: Affective faces for
+    goal-driven dyadic communication (2023), https://arxiv.org/abs/2301.10939
+13. Guo, Y., Chen, K., Liang, S., Liu, Y.J., Bao, H., Zhang, J.: Ad-nerf: Audio driven
+    neural radiance fields for talking head synthesis. In: Proceedings of the IEEE/CVF
+    International Conference on Computer Vision (ICCV). pp. 5784–5794 (October
+    2021)
+14. Ho, J., Jain, A., Abbeel, P.: Denoising diffusion probabilistic models. In: Advances
+    in Neural Information Processing Systems. vol. 33, pp. 6840–6851 (2020)
+15. Hsu, W.N., Bolte, B., Tsai, Y.H.H., Lakhotia, K., Salakhutdinov, R., Mohamed,
+    A.: Hubert: Self-supervised speech representation learning by masked prediction of
+    hidden units. IEEE/ACM Transactions on Audio, Speech, and Language Process-
+    ing 29, 3451–3460 (2021). https://doi.org/10.1109/TASLP.2021.3122291
+16. Jiang, J., Liang, C., Yang, J., Lin, G., Zhong, T., Zheng, Y.: Loopy: Taming Audio-
+    Driven Portrait Avatar with Long-Term Motion Dependency. In: The Thirteenth
+    International Conference on Learning Representations (2025)
+                                                                  EmbodiedHead           17
+
+17. Kerbl, B., Kopanas, G., Leimkühler, T., Drettakis, G.: 3d gaussian splatting for
+    real-time radiance field rendering. ACM Transactions on Graphics 42(4) (July
+    2023), https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/
+18. Li, J., Zhang, J., Bai, X., Zhou, J., Gu, L.: Efficient region-aware neural radiance
+    fields for high-fidelity talking portrait synthesis. In: Proceedings of the IEEE/CVF
+    International Conference on Computer Vision. pp. 7568–7578 (2023)
+19. Li, T., Bolkart, T., Black, M.J., Li, H., Romero, J.: Learning a model of facial shape
+    and expression from 4D scans. ACM Transactions on Graphics, (Proc. SIGGRAPH
+    Asia) 36(6), 194:1–194:17 (2017), https://doi.org/10.1145/3130800.3130813
+20. Lin, Y., Fan, Z., Wu, X., Xiong, L., Li, X., Kang, W., Peng, L., Lei, S.,
+    Xu, H.: Glditalker: Speech-driven 3d facial animation with graph latent diffu-
+    sion transformer. In: Kwok, J. (ed.) Proceedings of the Thirty-Fourth Interna-
+    tional Joint Conference on Artificial Intelligence, IJCAI-25. pp. 1548–1556. In-
+    ternational Joint Conferences on Artificial Intelligence Organization (8 2025).
+    https://doi.org/10.24963/ijcai.2025/173, main Track
+21. Lipman, Y., Chen, R.T.Q., Ben-Hamu, H., Nickel, M., Le, M.: Flow matching for
+    generative modeling (2023), https://arxiv.org/abs/2210.02747
+22. Liu, X., Gong, C., Liu, Q.: Flow straight and fast: Learning to generate and transfer
+    data with rectified flow (2022), https://arxiv.org/abs/2209.03003
+23. Loshchilov, I., Hutter, F.: Decoupled Weight Decay Regularization (2017). https:
+    //doi.org/10.48550/arXiv.1711.05101
+24. Mennecke, B.E., Triplett, J.L., Hassall, L.M., Conde, Z.J.: Embodied social pres-
+    ence theory. In: 2010 43rd Hawaii International Conference on System Sciences.
+    pp. 1–10 (2010). https://doi.org/10.1109/HICSS.2010.179
+25. Mildenhall, B., Srinivasan, P.P., Tancik, M., Barron, J.T., Ramamoorthi, R., Ng,
+    R.: Nerf: Representing scenes as neural radiance fields for view synthesis (2020),
+    https://arxiv.org/abs/2003.08934
+26. Ng, E., Joo, H., Hu, L., Li, H., Darrell, T., Kanazawa, A., Ginosar, S.: Learning
+    to listen: Modeling non-deterministic dyadic facial motion. In: Proceedings of the
+    IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR).
+    pp. 20395–20405 (June 2022)
+27. Peebles, W., Xie, S.: Scalable diffusion models with transformers. In: Proceedings of
+    the IEEE/CVF International Conference on Computer Vision (ICCV). pp. 4195–
+    4205 (October 2023)
+28. Peng, Z., Fan, Y., Wu, H., Wang, X., Liu, H., He, J., Fan, Z.: DualTalk: Dual-
+    Speaker Interaction for 3D Talking Head Conversations. In: Proceedings of the
+    IEEE/CVF Conference on Computer Vision and Pattern Recognition. pp. 21055–
+    21064 (2025)
+29. Perez, E., Strub, F., de Vries, H., Dumoulin, V., Courville, A.: Film: Visual rea-
+    soning with a general conditioning layer. In: Proceedings of the AAAI Conference
+    on Artificial Intelligence (AAAI) (2018)
+30. Qian, S., Kirschstein, T., Schoneveld, L., Davoli, D., Giebenhain, S., Nießner, M.:
+    Gaussianavatars: Photorealistic head avatars with rigged 3d gaussians. In: Proceed-
+    ings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition.
+    pp. 20299–20309 (2024)
+31. Richard, A., Zollhöfer, M., Wen, Y., et al.: Meshtalk: 3d face animation from
+    speech using cross-modality disentanglement. In: Proceedings of the IEEE/CVF
+    International Conference on Computer Vision. pp. 1173–1182 (2021)
+32. Siniukov, M., Chang, D., Tran, M., Gong, H., Chaubey, A., Soleymani, M.: Di-
+    tailistener: Controllable high fidelity listener video generation with diffusion (2025),
+    https://arxiv.org/abs/2504.04010
+18      Zhang et al.
+
+33. Siyao, L., Yu, W., Gu, T., et al.: Bailando: 3d dance generation by actor-critic
+    gpt with choreographic memory. In: Proceedings of the IEEE/CVF Conference on
+    Computer Vision and Pattern Recognition. pp. 11050–11059 (2022)
+34. Su, J., Lu, Y., Pan, S., Murtadha, A., Wen, B., Liu, Y.: Roformer: Enhanced
+    transformer with rotary position embedding. Neurocomputing (2024)
+35. Sun, Z., Lv, T., Ye, S., Lin, M., Sheng, J., Wen, Y.H., Yu, M., Liu, Y.J.:
+    Diffposetalk: Speech-driven stylistic 3d facial animation and head pose genera-
+    tion via diffusion models. ACM Transactions on Graphics (TOG) 43(4) (2024).
+    https://doi.org/10.1145/3658221
+36. Tao, R., Pan, Z., Das, R.K., Qian, X., Shou, M.Z., Li, H.: Is someone speak-
+    ing? exploring long-term temporal features for audio-visual active speaker detec-
+    tion. In: Proceedings of the 29th ACM International Conference on Multimedia.
+    p. 3927–3935. MM ’21, Association for Computing Machinery, New York, NY,
+    USA (2021). https://doi.org/10.1145/3474085.3475587, https://doi.org/
+    10.1145/3474085.3475587
+37. Tran, M., Chang, D., Siniukov, M., Soleymani, M.: Dyadic interaction modeling
+    for social behavior generation (2024), https://arxiv.org/abs/2403.09069
+38. Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A.N.,
+    Kaiser, L.u., Polosukhin, I.: Attention is all you need. In: Guyon, I., Luxburg,
+    U.V., Bengio, S., Wallach, H., Fergus, R., Vishwanathan, S., Garnett, R. (eds.)
+    Advances in Neural Information Processing Systems. vol. 30. Curran Associates,
+    Inc. (2017), https://proceedings.neurips.cc/paper_files/paper/2017/file/
+    3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf
+39. Wang, Z., Bovik, A.C., Sheikh, H.R., et al.: Image quality assessment: from error
+    visibility to structural similarity. IEEE Transactions on Image Processing 13(4),
+    600–612 (2004)
+40. Xie, L., Wang, X., Zhang, H., Dong, C., Shan, Y.: Vfhq: A high-quality dataset
+    and benchmark for video face super-resolution. In: Proceedings of the IEEE/CVF
+    Conference on Computer Vision and Pattern Recognition (CVPR) Workshops. pp.
+    657–666 (June 2022)
+41. Xing, J., Xia, M., Zhang, Y., Cun, X., Wang, J., Wong, T.T.: Codetalker: Speech-
+    driven 3d facial animation with discrete motion prior. In: Proceedings of the
+    IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR).
+    pp. 12780–12790 (June 2023)
+42. Yang, L., Zhang, Z., Song, Y., Hong, S., Xu, R., Zhao, Y., Zhang, W., Cui, B., Yang,
+    M.H.: Diffusion models: A comprehensive survey of methods and applications.
+    ACM computing surveys 56(4), 1–39 (2023)
+43. Zanon Boito, M., Iyer, V., Lagos, N., Besacier, L., Calapodescu, I.: mHuBERT-
+    147: A Compact Multilingual HuBERT Model. In: Interspeech 2024. pp. 3939–3943
+    (2024). https://doi.org/10.21437/Interspeech.2024-938
+44. Zhang, L., Cai, S., Li, M., Wetzstein, G., Agrawala, M.: Frame context packing and
+    drift prevention in next-frame-prediction video diffusion models. In: The Thirty-
+    ninth Annual Conference on Neural Information Processing Systems (2025)
+45. Zhang, R., Isola, P., Efros, A.A., et al.: The unreasonable effectiveness of deep fea-
+    tures as a perceptual metric. In: Proceedings of the IEEE Conference on Computer
+    Vision and Pattern Recognition. pp. 586–595 (2018)
+46. Zhu, L., Lin, L., Zhu, Y., Wu, J., Hou, X., Li, Y., Liu, Y., Chen, J.:
+    MANGO:Natural Multi-speaker 3D Talking Head Generation via 2D-Lifted En-
+    hancement (2026). https://doi.org/10.48550/arXiv.2601.01749
+                                                              EmbodiedHead         19
+
+47. Zhu, Y., Zhang, L., Rong, Z., Hu, T., Liang, S., Ge, Z.: Infp: Audio-driven inter-
+    active head generation in dyadic conversations. In: Proceedings of the IEEE/CVF
+    Conference on Computer Vision and Pattern Recognition (CVPR). pp. 10667–
+    10677 (June 2025)
+20      Zhang et al.
+
+      EmbodiedHead: Real-Time Listening and
+     Speaking Avatar for Conversational Agents
+                          Supplementary Material
+
+
+    This supplementary material provides additional details to support the main
+manuscript. Sec. A details the model architecture. Sec. B describes the hyperpa-
+rameters and formalizes the evaluation metrics used in our experiments. Sec. C
+presents additional experimental results, including additional ablation results,
+the user study, and runtime analysis. Sec. D discusses ethical considerations.
+Sec. E discusses the limitations of our current framework and outlines directions
+for future research. For more qualitative results, please refer to the demos on
+our project page.
+
+
+A    Architecture Details
+
+In the configuration used in our experiments, the Rectified-Flow [22] DiT [4, 27]
+predicts FLAME [19] motion coefficients directly. Each target frame contains
+100 expression coefficients together with jaw pose, eye pose, global rotation, and
+global translation, giving a 115-dimensional motion vector in total. The model
+predicts a 100-frame target window at 25 FPS. We append a one-dimensional
+listening-speaking state to every motion frame before tokenization, so the per-
+token input dimension becomes 116. A linear projection maps each token to
+a 448-dimensional transformer [38] space. The DiT backbone uses 8 blocks, 8
+attention heads, and an MLP ratio of 4, yielding a head dimension of 56 and a
+feed-forward hidden width of 1792.
+    For temporal context, the model consumes 75 historical frames in addition to
+the current noisy window. Following our History Context Packing (HCP) design,
+these 75 frames are split into four groups with receptive spans of 5, 10, 20, and 40
+frames, respectively. Each group is compressed into 5 tokens by an independent
+linear projector, producing 20 packed history tokens in total. These 20 tokens are
+concatenated with the 100 current-window tokens, so self-attention is performed
+over a sequence of 120 motion tokens. The reference condition is formed by
+concatenating the first 100 FLAME shape coefficients with one reference motion
+frame, resulting in a 215-dimensional vector.
+    We use frozen mHuBERT-147 [15,43] as the audio encoder. All hidden layers
+are fused by learnable softmax weights, with separate weight sets for the local
+cross-attention branch and the global conditioning branch. The extracted audio
+sequence is aligned to the motion rate by a strided 1D convolution with kernel
+size 5 and stride 2, followed by LayerNorm [2], producing 448-dimensional audio
+tokens. In cross-attention, we further apply a diagonal locality mask with radius
+2 frames, so each motion token attends only to a narrow temporal neighborhood
+in the aligned audio sequence.
+                                                             EmbodiedHead        21
+
+    Global conditions are injected through AdaLN [42]. The conditioning vector
+has dimension 896 and is formed by concatenating four parts: a 448-dimensional
+sinusoidal timestep embedding, a 112-dimensional reference embedding, a 224-
+dimensional mean-pooled global audio embedding, and a 112-dimensional mo-
+tion magnitude embedding derived from the normalized rotation and transla-
+tion guidance scalars. Each DiT block consists of RoPE self-attention, RoPE
+audio cross-attention, and a feed-forward layer, with rotary base θ = 10000 [34].
+Before audio cross-attention, the aligned audio features are modulated by a
+block-specific FiLM [29] network conditioned on the listening-speaking state;
+this modulator uses a hidden size of 112 and zero-initialized output weights so
+that training starts from an identity mapping. The AdaLN modulation layers
+are also zero-initialized for stable optimization. Cross-attention is applied only
+to the 100 current-window tokens, while the packed history tokens contribute
+through self-attention only. Finally, a last AdaLN-modulated projection maps
+the final 100 tokens back to 115-dimensional velocity predictions.
+
+
+B     Experimental Setup and Metric Formalization
+B.1   Training Hyperparameters and Loss Weights
+Both training stages utilize the AdamW [23] optimizer. For the flow-matching
+objective (Equation (6) of the main manuscript), the parameter group weights
+are empirically set to: λexpr = 0.6, λjaw = 0.1, λeye = 0.1, λrot = 0.1, and
+λtrans = 0.1. The pose smoothing weight is set to λsmooth = 0.1.
+    For Stage I, we employ a linear learning rate warmup for the first 2,000
+iterations and train with a total batch size of 64. During the Stage II end-to-end
+refinement, we employ 1,000 warmup steps and render the images at a resolution
+of 256×256. The loss weights (Equation (8) of the main manuscript) are set as
+follows: the coefficient-space flow-matching weight is set to λcoef = 0.2, while the
+image-domain L1 and perceptual loss weights are set to λ1 = 0.2 and λp = 0.2,
+respectively. We also scale the learning rate of the GAGAvatar [7] renderer by a
+factor of 0.5 relative to the base learning rate. Due to the memory footprint of
+the differentiable renderer, the total batch size in Stage II is reduced to 4.
+
+B.2   Metric Calculation Details
+To comprehensively evaluate both the 3D motion fidelity and the 2D visual
+quality, our metrics (LVE [31], FDD [41], MOD [41], BA [33], SID [28], PSNR,
+SSIM [39], and LPIPS [45]) span geometric, temporal, and image domains. For
+3D geometry-based metrics, the predicted FLAME [19] coefficients are mapped
+to mesh vertices v and 3D landmarks p. In alignment with established evaluation
+protocols, we formalize the metrics as follows.
+
+Lip Vertex Error (LVE ↓). LVE [31] evaluates temporal lip synchronization
+by computing the maximum L2 error across all vertices in the lip region (Vlip )
+22     Zhang et al.
+
+for each frame t, and averaging over the sequence of length T :
+
+
+                                                                                   \text {LVE} = \frac {1}{T} \sum _{t=1}^{T} \max _{i \in V_{\text {lip}}} \left \| \mathbf {v}_{t, i}^{\text {pred}} - \mathbf {v}_{t, i}^{\text {gt}} \right \|_2                                                                                                                                   (9)
+
+
+where vt,i ∈ R3 denotes the 3D coordinate of vertex i at frame t.
+
+
+Face Dynamics Deviation (FDD ↓). FDD [41] assesses the naturalness of
+upper-face motions. Let Vupper denote the subset of FLAME [19] mesh vertices
+corresponding to the eye and forehead regions. We first compute the relative
+vertex motion to the initial frame mt,i = vt,i − v1,i ∈ R3 to remove static
+offsets. We then measure the difference in the temporal standard deviation (σi )
+between the prediction and ground truth:
+
+
+                                                                                                         \sigma _i = \sqrt {\frac {1}{T}\sum _{t=1}^T \left \| \mathbf {m}_{t, i} - \bar {\mathbf {m}}_i \right \|_2^2}                                                                                                                                                               (10)
+
+                             PT
+where m̄i = T1                               t=1 mt,i is the temporal mean. The FDD is formulated as:
+
+
+                                                                           \text {FDD} = \frac {1}{|V_{\text {upper}}|} \sum _{i \in V_{\text {upper}}} \left | \sigma _i^{\text {pred}} - \sigma _i^{\text {gt}} \right |                                                                                                                                                            (11)
+
+
+
+Mouth Opening Difference (MOD ↓). MOD [41] focuses on the similarity
+of mouth opening amplitudes. Let dt = ∥pt,66 − pt,62 ∥2 be the distance between
+the upper (idx: 62) and lower (idx: 66) lip landmarks. MOD is the mean absolute
+error of this distance:
+
+                                                                                                         \text {MOD} = \frac {1}{T} \sum _{t=1}^{T} \left | d_t^{\text {pred}} - d_t^{\text {gt}} \right |                                                                                                                                                                            (12)
+
+
+
+Beat Alignment (BA ↑). BA [33] quantifies the rhythmic synchronization
+of head movements. We extract the angular velocity of head rotation and de-
+tect motion peaks (beats) B using a dynamic threshold. The alignment score is
+calculated symmetrically using a Gaussian kernel with σ = 0.1s:
+
+
+              \begin {aligned} \text {BA} = \frac {1}{2} \Bigg ( &\frac {1}{|B^{\text {pred}}|} \sum _{b \in B^{\text {pred}}} \exp \Big (-\frac {\min _{b' \in B^{\text {gt}}}(b - b')^2}{2\sigma ^2}\Big ) \\ &+ \frac {1}{|B^{\text {gt}}|} \sum _{b' \in B^{\text {gt}}} \exp \Big (-\frac {\min _{b \in B^{\text {pred}}}(b' - b)^2}{2\sigma ^2}\Big ) \Bigg ) \end {aligned} 
+                                                                                                                                                                                                                                                                                                                                                                                      (13)
+
+
+
+where b, b′ ∈ R denote the timestamps of the detected beats in seconds.
+                                                                                                                                                   EmbodiedHead    23
+
+Diversity Metric (SID ↑). To measure the generation diversity from the same
+audio input, we use the Speaker Identity Diversity (SID) [28]. We fit a K-Means
+clustering model on the ground truth feature distribution and predict the cluster
+assignments for the generated sequences. The diversity for a specific component
+k is defined as the Shannon entropy of its cluster assignment histogram:
+
+
+                                        \text {SID}_{k} = -\sum _{c=1}^{K} p_c \log _2(p_c + \epsilon )                                                           (14)
+
+
+where pc = nc /N is the probability of a sample falling into cluster c, and ϵ = 10−8
+is a small constant for numerical stability. For a comprehensive assessment, we
+compute the mean of the SID across three semantic groups: jaw (SIDjaw ), the
+first 50 dominant dimensions of expression (SIDexp50 ), and rotation (SIDrot ):
+
+                       \text {SID} = \frac {1}{3} \left ( \text {SID}_{\text {jaw}} + \text {SID}_{\text {exp50}} + \text {SID}_{\text {rot}} \right )            (15)
+
+
+2D Metrics (PSNR ↑, SSIM ↑, LPIPS ↓). To evaluate the final visual
+quality, we synthesize 2D image frames by rendering the FLAME-driven 3D
+mesh via the GAGAvatar [7] pipeline. The rendered images are centrally cropped
+to a 256 × 256 region of interest (ROI) surrounding the face.
+
+ – PSNR & SSIM: We compute the Peak Signal-to-Noise Ratio (PSNR) and
+   Structural Similarity Index (SSIM) [39] frame-by-frame between the ren-
+   dered outputs and the preprocessed ground-truth video, then average across
+   the temporal dimension. SSIM is evaluated using an 11×11 Gaussian window
+   with σ = 1.5.
+ – LPIPS (AlexNet): We adopt the AlexNet-based LPIPS [45] implementa-
+   tion to measure perceptual similarity, reporting the average distance across
+   all frames.
+
+
+C     Additional Experimental Results
+
+C.1   Additional Quantitative Ablation Results
+
+In this section, we provide more comprehensive quantitative ablation results to
+complement the main manuscript, specifically detailing the impact of inference-
+step scheduling and motion magnitude guidance.
+
+
+Ablation on Inference-Step Scheduling. We first present the complete ab-
+lation study on the inference steps in Tab. S1. The results demonstrate that
+our Rectified-Flow DiT architecture enables high-quality generation with only a
+few sampling steps. Specifically, 1-step inference already achieves performance
+comparable to the 25-step setting on most 3D motion and 2D image metrics.
+24      Zhang et al.
+
+Weighing these findings, we ultimately select 4 steps as our default inference con-
+figuration to achieve an optimal balance between real-time speed, visual quality,
+and motion fidelity.
+    To further validate the mathematical grounding of our Stage-II image-domain
+fine-tuning, we report a special “1† ” setting. This setting denotes one-step gen-
+eration using randomly sampled timesteps that are strictly consistent with the
+training phase distribution. The performance of this practical one-step output
+supports the validity of our Stage-II optimization, rendering the end-to-end
+image-domain refinement both computationally feasible and highly efficient.
+
+
+Table S1: Detailed ablation on inference-step scheduling. Best results are highlighted
+in bold except for 1† . 1† denotes one-step generation with randomly sampled timesteps
+(training-consistent); results support the validity of Stage-II image-domain fine-tuning
+from practical one-step outputs.
+
+        Step     LVE↓     FDD↓      MOD↓      BA↑    PSNR↑      SSIM↑     LPIPS↓
+        1         5.80     1.76      2.73     0.48    17.08     0.571      0.204
+        1†        4.45     0.85      2.44     0.47    17.09     0.576      0.193
+        2         5.79     1.74      2.67     0.45    17.23     0.578      0.206
+        3         5.91     1.60      2.68     0.44    17.27     0.578      0.202
+        4         5.76     1.55      2.63     0.43    17.29     0.578      0.202
+        5         5.95     1.53      2.69     0.42    17.22     0.576      0.202
+        10        5.99     1.46      2.67     0.43    17.13     0.573      0.206
+        15        6.12     1.47      2.73     0.42    17.09     0.571      0.208
+        25        6.18     1.44      2.73     0.41    17.10     0.572      0.208
+        †
+            Not directly comparable to standard fixed-step inference settings.
+
+
+
+
+Ablation on Motion Magnitude. We quantitatively evaluate the explicit
+controllability introduced by our global condition module. As visualized in the
+main manuscript, modulating the motion magnitude values (m = [mr , mt ])
+affords intuitive control over the kinematic intensity of the generated head dy-
+namics. Tab. S2 details how varying these motion magnitude values influences
+the actual generated rotation and translation magnitudes. Notably, the results
+exhibit a degree of disentanglement: altering the rotation condition (mr ) pri-
+marily scales the rotational amplitude while leaving the translation magnitude
+mostly stable, and vice versa. For reference, the original Ground Truth (GT)
+sequences exhibit a mean rotation magnitude of 0.61 and a translation mag-
+nitude of 0.81. This baseline serves as a standard anchor, demonstrating that
+our model can effectively control the motion intensity, capable of generating
+both subtle, restrained motions (when setting small motion magnitude values,
+e.g., 0.1) and highly expressive, larger-amplitude dynamics (when setting large
+motion magnitude values, e.g., 0.9).
+                                                                       EmbodiedHead            25
+
+Table S2: Quantitative ablation on motion magnitude guidance. We report the actual
+generated Rotation (Rot.) and Translation (Trans.) magnitudes under different combi-
+nations of motion magnitude values [mr , mt ]. The results demonstrate that our model
+not only effectively controls the magnitude but also partially disentangles rotation and
+translation.
+
+                                             Input Rot. (mr )
+    Input Trans.
+                             0.1                        0.5                     0.9
+        (mt )
+                      Rot.         Trans.        Rot.         Trans.     Rot.         Trans.
+         0.1          0.50          0.88         1.05          0.95      1.77          1.07
+         0.5          0.55          1.41         1.03          1.56      1.64          1.72
+         0.9          0.76          2.57         1.10          3.05      1.31          2.63
+         GT                         Rot.: 0.61                   Trans.: 0.81
+
+
+
+C.2    User Study
+
+Fig. S1 shows the interface used in our user study. Before starting the compar-
+isons, participants were presented with the study instructions, an audio playback
+check, and a consent statement for voluntary participation. During the evalua-
+tion, two anonymized videos were shown side by side for each comparison, with
+randomized left-right order. Participants then selected the preferred result or in-
+dicated a tie according to the four evaluation criteria: Overall Realism, Lip-Sync
+Accuracy, Listening Naturalness, and Turn-Taking Smoothness.
+
+
+C.3    Runtime and Latency Analysis
+
+We profile the runtime of the main components on a single NVIDIA RTX 3090
+GPU. For each 100-frame generation window, audio feature extraction, 4-step
+Rectified-Flow DiT motion generation, and GAGAvatar rendering take 7.8 ms,
+83 ms, and 1.69 s, respectively. The Streaming Audio Scheduler introduces neg-
+ligible overhead, requiring only 0.029 ms for each mixed-mode scheduling tick.
+Overall, the pipeline achieves real-time performance and is suitable for interac-
+tive deployment.
+
+
+D     Ethical Considerations
+
+EmbodiedHead aims to support positive applications such as conversational
+agents, virtual education, and assistive communication by providing more natu-
+ral and engaging head-avatar interactions. The training and evaluation data used
+in this work are collected from publicly available research datasets and are used
+only for academic research following their intended research purposes. To protect
+privacy, we do not collect private videos or personally identifiable information
+from users, and the user study records only anonymized survey responses.
+26     Zhang et al.
+
+
+
+
+Fig. S1: Screenshot of the user study interface. The left panel shows the study in-
+structions, audio playback check, and consent statement. The right panel shows the
+randomized pairwise comparison interface with four evaluation criteria.
+
+
+
+    At the same time, realistic conversational avatar generation may introduce
+potential misuse risks, such as identity impersonation, misleading synthetic me-
+dia, or malicious deepfakes. We strictly prohibit the use of this technology for
+unauthorized identity impersonation, non-consensual content generation, decep-
+tion, harassment, or any other harmful purposes. When deployed, generated
+content should be clearly disclosed as synthetic, and watermarking or restricted
+licenses should be applied to prevent unauthorized or malicious use.
+
+
+E    Limitations and Future Work
+While EmbodiedHead achieves high-fidelity conversational dynamics, it presents
+two main limitations. First, the avatar’s current listening behaviors are primarily
+driven by acoustic cues rather than semantic-level dialogue understanding, lim-
+iting its intent-driven expressiveness. Second, unlike causal autoregressive (AR)
+architectures, our diffusion-based framework inherently relies on window-based
+processing, which introduces a theoretical latency floor. Future work will focus
+on integrating textual semantics from LLMs to enable context-aware listening re-
+sponses, as well as exploring hybrid AR-diffusion structures to further minimize
+streaming latency.
+

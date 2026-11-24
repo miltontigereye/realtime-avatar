@@ -1,0 +1,744 @@
+                     This CVPR paper is the Open Access version, provided by the Computer Vision Foundation.
+                                  Except for this watermark, it is identical to the accepted version;
+                            the final published version of the proceedings is available on IEEE Xplore.
+
+
+
+
+  StreamAvatar: Streaming Diffusion Models for Real-Time Interactive Human
+                                  Avatars
+
+    Zhiyao Sun1 *† Ziqiao Peng2 * Yifeng Ma3 * Yi Chen3 Zhengguang Zhou3 Zixiang Zhou3
+         Guozhen Zhang4 Youliang Zhang1 Yuan Zhou3‡ Qinglin Lu3§ Yong-Jin Liu1§
+         1                                   2                                              3             4
+             Tsinghua University                 Renmin University of China                     Tencent       Nanjing University
+                                    Project Page:            https://streamavatar.github.io
+
+  Non-causal Human Video Model                             Two-Stage Adaptation                               Causal Human Video Model
+                                                   Autoregressive             Adversarial
+   ✗ Slow
+                                                    Distillation              Refinement
+                                                                                                          …                 …   ✓ Real-time
+   ✗ Fixed Length                                                                                                               ✓ Infinite Length
+
+
+
+                                                               talk                         listen                   talk
+  User audio
+
+  Agent audio          Stream                    Stream
+                          in                       out
+  Reference
+    Image                    Real-time generation
+                                                                 High-resolution interactive human avatar with vivid expressions and gestures.
+Figure 1. We propose StreamAvatar, which adapts human video diffusion models for real-time, streaming, and interactive video generation
+through a two-stage framework. Given a reference image and user/agent audio streams as input, StreamAvatar generates high-resolution
+streaming human video in real-time, producing vivid talking/listening expressions and gestures.
+
+                           Abstract                                         performance, surpassing existing approaches in generation
+                                                                            quality, real-time efficiency, and interaction naturalness.
+Real-time, streaming interactive avatars represent a critical
+yet challenging goal in digital human research. Although
+diffusion-based human avatar generation methods achieve                     1. Introduction
+remarkable success, their non-causal architecture and high                  Generating realistic, expressive, and versatile digital humans
+computational costs make them unsuitable for streaming.                     is a long-standing goal in computer vision and graphics,
+Moreover, existing interactive approaches are typically re-                 driving progress across a broad spectrum of research top-
+stricted to the head-and-shoulder region, limiting their abil-              ics [7, 28, 41, 43, 59, 60]. Among these, real-time interactive
+ity to produce gestures and body motions. To address these                  human avatars hold particular value, enabling fluid, dynamic
+challenges, we propose a two-stage autoregressive adapta-                   communication in applications such as education, entertain-
+tion and acceleration framework that applies autoregres-                    ment, and virtual assistants. Recently, diffusion models
+sive distillation and adversarial refinement to adapt a high-               have achieved remarkable success in human avatar genera-
+fidelity human video diffusion model for real-time, interac-                tion [4, 7, 9, 15, 20, 32, 40, 45, 48]. However, in real-time
+tive streaming. To ensure long-term stability and consistency,              interactive settings, diffusion-based human avatar generation
+we introduce three key components: a Reference Sink, a                      methods still face three key challenges: 1) Real-time stream-
+Reference-Anchored Positional Re-encoding (RAPR) strat-                     ing: Most methods are inherently unsuitable for real-time
+egy, and a Consistency-Aware Discriminator. Building on                     streaming. Firstly, the iterative denoising process and long-
+this framework, we develop a one-shot, interactive, human                   context attention incur a prohibitive amount of computation.
+avatar model capable of generating both natural talking and                 Secondly, the non-causal bidirectional attention mechanism
+listening behaviors with coherent gestures. Extensive experi-               requires the entire video sequence to be processed at once,
+ments demonstrate that our method achieves state-of-the-art                 which is incompatible with streaming generation. 2) Long-
+  * Equal contribution.  ‡ Project leader. § Corresponding author.          duration generation stability: Streaming interaction requires
+  † Work done during internship at Tencent Hunyuan.                         generating long-duration videos; however, existing methods
+
+
+
+                                                                      10887
+suffer from error accumulation and drifting when extended           ial refinement, which significantly improves generation
+over time, resulting in degraded performance. 3) Talking–           quality and stability.
+listening interaction: Current methods focus on one-way           • To improve consistency and stability for long video gen-
+talking generation while neglecting the avatar’s listening          eration, we propose three techniques, namely Reference
+state. In conversational scenarios, not modeling the listening      Sink, Reference-Anchored Positional Re-encoding, and a
+state makes the interaction feel unnatural. Although some           consistency-aware discriminator.
+studies explore listening video generation [26, 35, 49, 64] or    • Building on this framework, we develop StreamAvatar,
+interactive video generation [11, 67], they model only the fa-      a one-shot, real-time, streaming interactive human video
+cial or head area and fail to capture full-body expressiveness      model that can generate both talking and listening behav-
+and reactivity.                                                     iors with coherent expressions, gestures, and transitions.
+    To address these challenges, we propose StreamAvatar,         • Extensive experiments demonstrate that our method out-
+which achieves real-time streaming interactive human video          performs or performs competitively with existing state-of-
+generation. StreamAvatar not only produces realistic re-            the-art approaches, while operating significantly faster.
+sults during speaking, but also generates rich and responsive
+listening motions conditioned on the interlocutor’s audio.        2. Related Work
+Specifically, we first train a powerful yet slow non-causal
+                                                                  2.1. Audio-Driven Avatar Video Generation
+diffusion model for interactive human avatar generation as
+the teacher model, capable of producing both talking and          Traditional and 3D-Based Methods. Early efforts rely
+listening behaviors. To achieve such interaction capability,      on image-to-image translation [38, 63] or image warping
+we utilize a talking-listening audio mask to extract distinct     [66] to generate lip-synced videos, but are often limited to
+talking and listening audio features, which are then injected     the mouth region and fail to produce natural head motion.
+through dedicated talking/listening modules of the model.         Later works [24, 30, 31, 52, 60] map audio to intermediate
+This design allows the model to generate expressive co-           representations (e.g., 3DMMs or latent codes) and render
+speech or listening expressions and gestures.                     videos with lightweight decoders, improving fidelity but
+    Then, we propose a two-stage autoregressive adaptation        still limited by the expressiveness of these intermediates.
+and acceleration framework for transforming this teacher          Another line of methods directly models the subject with
+model into a real-time, streaming student model. In the first     audio-conditioned 3D representations such as Neural Radi-
+stage, we adapt the attention mechanism of the model from         ance Fields [10, 29, 54] or 3D Gaussian Splatting [18, 37].
+bidirectional attention into block-wise causal attention, and     However, they typically require per-subject training, making
+then perform distillation from the teacher model to obtain        them unable to generalize in a one-shot manner.
+a few-step autoregressive generator, which significantly ac-      Diffusion-Based Avatars. Recently, diffusion models have
+celerates inference, reducing the DiT denoising process to        set a new standard for generation quality and one-shot
+1/40 of its original runtime. To solve the critical challenges    generalization in the avatar space. A large body of work
+of long-video stability and identity preservation, we also        has focused on integrating audio features into large-scale
+introduce novel mechanisms for attention: a Reference Sink,       video diffusion models to generate high-fidelity, expres-
+which enforces persistent attention to the reference frame,       sive portraits [5, 7, 15, 43, 48, 58] and semi/full-body
+and a Reference-Anchored Positional Re-encoding (RAPR)            videos [4, 9, 19, 20, 32, 33, 45]. While these methods
+strategy, which resolves the train–test mismatch and atten-       produce state-of-the-art visual quality, their reliance on an
+tion decay in long-sequence inference. In the second stage,       iterative, bidirectional denoising process makes them com-
+we propose an adversarial refinement process to resolve the       putationally prohibitive and fundamentally unsuitable for
+quality degradation such as distortion and blur caused by dis-    real-time, streaming applications. Our work bridges this gap,
+tillation, and improve long video consistency. Specifically,      targeting the generation of high-fidelity human avatars in
+we introduce a multitask consistency-aware discriminator,         real-time.
+which assesses both the realism of individual frames and the
+consistency over all generated frames. The adversarial re-         2.2. Streaming Video Diffusion Models
+finement stage significantly improves the generation quality      A large number of video diffusion models are limited to
+and stability of our causal generator.                            fixed-length generation due to their use of bidirectional at-
+    Our main contributions are summarized as follows:             tention. Common workarounds, such as motion or over-
+• We introduce a two-stage autoregressive adaptation and          lapping frames, often create unnatural transitions, identity
+   acceleration framework for human video diffusion mod-          drift, and cumulative errors. Moreover, these methods can-
+   els. The first stage performs autoregressive distillation to   not reduce generation latency. To enable efficient, streaming
+   convert a bidirectional diffusion model into a real-time,      generation, one prominent line of work focuses on distill-
+   streaming generator. The second stage performs adversar-       ing bidirectional models into few-step causal autoregressive
+
+
+
+                                                              10888
+systems. CausVid [56] pioneered this by re-architecting a           3.1. Streaming Human Video Diffusion Model
+bidirectional DiT with block-causal attention, using Diffu-         Recent human video generation approaches are generally
+sion Forcing (DF) [2] and distribution matching distillation        built on video models constructed with diffusion transform-
+(DMD) [55]. Self-Forcing [14] later improved upon DF                ers [36]. They typically adopt bidirectional attention, and
+by identifying a critical train-test mismatch and introduc-
+                                                                    take a reference image x00 , a text prompt y, and an audio
+ing a “student-forcing” scheme, where the student model
+                                                                    feature sequence {at } as input conditions. In the follow-
+conditions on its own prior outputs. Seaweed-APT2 [22]              ing, we describe our two-stage autoregressive adaptation
+integrates adversarial post-training into autoregressive distil-    and acceleration framework using this class of models as a
+lation to further boost generation quality.                         representative example.
+    However, a key “train-short, test-long mismatch” chal-
+                                                                    3.1.1. Stage 1: Autoregressive Distillation.
+lenge persists for these autoregressive methods: quality de-
+grades when extrapolating to sequences far beyond the train-       This stage has two goals: (1) re-architect the model for
+ing horizon. LongLive [53] and Self-Forcing++ [8] both             autoregressive generation, and (2) distill its bidirectional,
+address this by applying DMD to segments sampled from              iterative denoising process into a causal, few-step model.
+long videos generated by the student model. In contrast,           Re-architecture. The distillation process operates on the
+we identify that this extrapolation failure also stems from        Diffusion Transformer (DiT) within the VAE latent space.
+an out-of-distribution issue induced by Rotary Positional          The original DiT is bidirectional over a fixed generation
+Embeddings (RoPE). We propose a re-encoding mechanism              window {xnt }Tt=0 , where n = 0, 1, . . . , N denotes the dif-
+to resolve this instability without the need of generating long    fusion timestep and T + 1 is the window size. Inspired by
+videos. Similar to LongLive, we also employ an attention           prior works [14, 56], we split the generation window into
+sink to mitigate identity drift.                                   smaller chunks: a clean 1-frame Reference chunk {x00 } and
+                                                                                                                  T /C
+                                                                   subsequent Generation chunks {{xnt }et=s   i
+                                                                                                                 }
+                                                                                                                i i=1
+                                                                                                                       of size C,
+2.3. Interactive and Responsive Video Avatars                      where si = (i − 1) · C + 1 and ei = i · C. See Fig. 2
+                                                                   for an example with C = 3. We enforce causal attention
+Natural human interaction is a dyadic process of speaking          between chunks and bidirectional attention within chunks,
+and listening. Recent avatar generation methods [27, 57]           allowing the model to better capture local dynamics while
+achieve real-time performance but only process talking au-         enabling autoregression. To allow for efficient inference for
+dio, lacking temporally aligned listener responses. Con-           long videos, a rolling KV cache is adopted to store a fixed
+versely, listener-oriented approaches [26, 35, 44, 49, 64]         window of context information. This modification preserves
+produce responses aligned with the interlocutor’s audio yet        the original network weights, providing a strong starting
+do not model smooth speaking–listening transitions. Uni-           point for distillation.
+fied speaking–listening methods [11, 67] handle both states        Distillation Pipeline. We first follow CausVid [56] and
+with natural transitions but confine motion to the head-and-       introduce an initialization stage to stabilize subsequent dis-
+shoulder region, precluding expressive hand and body ges-          tillation. Specifically, we use the teacher model to generate
+tures. MIDAS [3] unifies multimodal conditions into an             avatar videos from a small set of avatar images and audio
+LLM structure with a lightweight diffusion head for low-           clips and record the corresponding denoising trajectories to
+latency streaming, but requires per-identity finetuning and        construct a dataset of Ordinary Differential Equation (ODE)
+yields moderate visual quality. X-Streamer [51] integrates         solution pairs ({xnt }, {x0t }). Since our goal is to distill a
+speech understanding and audio-visual generation via a dual-       few-step autoregressive student generator, we retain only
+Transformer architecture, yet suffers from limited motion          the timesteps used by the student model and train it to pre-
+diversity, stiff listening behavior, and low output resolution.    dict {x0t } from {xnt } for each chunk using a regression loss.
+   Our approach overcomes these limitations with one-shot,         Next, we apply Score Identity Distillation (SiD) [65] to train
+real-time, high-resolution generation that covers whole body       the student model by distilling from the teacher. Impor-
+motion and supports smooth speaking–listening transitions          tantly, we adopt the student-forcing scheme from Self Forc-
+with synchronized listener responses.                              ing [14], where the student model predicts the next chunk
+                                                                         ej
+                                                                   {x̂t }t=s j
+                                                                               conditioned on its own output from the previous
+                                                                   chunks {{x̂t }et=s
+                                                                                    i
+                                                                                       } , thereby mitigating the training–test
+                                                                                      i i<j
+3. Method                                                          mismatch. Note that in the original Self Forcing, the next
+                                                                   chunk’s denoising process is conditioned on clean (fully de-
+In this section, we first introduce our two-stage autoregres-      noised) previous chunks {x̂0t }, which requires an additional
+sive adaptation and acceleration framework (Sec. 3.1), and         forward pass to update the KV-cache after denoising. How-
+then develop a real-time, streaming interactive human video        ever, we empirically find that omitting this update step does
+model (Sec. 3.2) based on this framework.                          not noticeably degrade generation quality. This means the
+
+
+
+                                                               10889
+            Block 0        Block 1                        Block 2                         Block T/3                     Stage 1: Autoregressive Distillation
+                                                                                                                                                                  SiD
+              𝑥00     𝑥1Ƹ 𝑛−1 𝑥2Ƹ 𝑛−1 𝑥3Ƹ 𝑛−1        𝑥4Ƹ 𝑛−1 𝑥5Ƹ 𝑛−1 𝑥6Ƹ 𝑛−1        …     𝑛−1 𝑛−1 𝑛−1
+                                                                                        𝑥Ƹ𝑇−2 𝑥Ƹ𝑇−1 𝑥Ƹ𝑇                         Bidirectional DiT                           Block-Causal DiT
+
+                                                                                                                        Stage 2: Adversarial Refinement
+  Text                                           Block-Causal DiT                                                                                                Per-frame Cross-Attn
+                                                ×𝑁                             ×𝑁                             ×𝑁
+                                                                                                                                                                            Q-Former                  × 𝑁𝑄
+                                                                                                                                Bidirectional DiT                            Q-Former
+                                                                                                                                                                              Q-Former
+ Audio        𝑎0       𝑎1 𝑎2 𝑎3                       𝑎4 𝑎5 𝑎6                          𝑎𝑇−2 𝑎𝑇−1 𝑎𝑇                                                                                                 layers
+                                                                                    …                                                                                                               concat
+                                                                                          𝑛
+ Frames       𝑥00      𝑥ො1𝑛 𝑥ො2𝑛 𝑥ො3𝑛                𝑥ො4𝑛 𝑥ො5𝑛 𝑥ො6𝑛                     𝑥Ƹ𝑇−2   𝑛
+                                                                                              𝑥Ƹ𝑇−1 𝑥Ƹ𝑇𝑛
+                                                                                                                             𝑥00 𝑥ො10 𝑥ො20 … 𝑥ො 𝑇0                        Per-frame Features
+                                                                                                                                                                    Q        K, V
+                                                                                                                                                                        Cross-Attn & Proj         Proj
+Index for                                                                                                                       Block-Causal DiT
+  RoPE
+              0        1       2       3              4       5       6             …   𝐷−2 𝐷−1 𝐷
+                                                                                                                                                                        Consistency          Per-frame
+                    Reference Sink                              Rolling KV-Cache w/ RAPR                                             Conditions                           Logit               Logits
+
+Figure 2. Overview of the two-stage autoregressive adaptation and acceleration framework. The original bidirectional DiT is first transformed
+into a block-causal DiT with block size C = 3. Then, in stage 1, we apply Score Identity Distillation to distill from the bidirectional teacher
+into a block-causal student. A Reference Sink and Reference-Anchored Positional Re-encoding is introduced to improve long-term stability
+and consistency. In stage 2, we apply an adversarial refinement process guided by a Consistency-Aware Discriminator, to further improve
+generation quality, consistency, and stability.
+
+
+                                                                                                              : Reference Sink X/Y : Frame Index/RoPE Position                               (𝐷 < 𝑇 ≪ 𝑀)
+next chunk can instead be conditioned on noisy previous
+                                                                                                            w/o RAPR                                       w/ RAPR                 * For frame with index 𝑋,
+chunks {x̂1t }, which reduces one forward pass per chunk and                                                                                                                         𝑑 = min 𝐷, 𝑋
+                                                                                                            0/0 1/1       7/7        8/8         9/9        0/0 1/1          7/7          8/8         9/9
+improves efficiency.                                                                                                            …                                                   …
+                                                                                                    Train
+
+
+                                                                                                                       Unlimitedly growing RoPE position                      Reencode with capped position
+                                                                                                            0/0 1/1 T-3/T-3 T-2/T-2 T-1/T-1                 0/0 1/1 T-3/d-2 T-2/d-1 T-1/d
+Reference Sink. To avoid the context window growing                                                         0/0 1/1 T-2/T-2 T-1/T-1 T /T                    0/0 1/1 T-2/d-2 T-1/d-1 T /d
+infinitely, prior works [14, 56] introduce a rolling KV cache.
+                                                                                                    Test
+
+
+
+
+                                                                                                            0/0 1/1 M-2/M-2 M-1/M-1 M              /M       0/0 1/1 M-2/d-2 d-1/d-1 M                    /d
+However, as new chunks are generated, the KV pairs for                                                        ✗ Training/Test inconsistency          ✓ Simulates long video generation during training
+the reference frame are eventually evicted, leading to severe                                                 ✗ Long-distance attention decay        ✓ Limits maximum distance (D) for RoPE attention
+
+identity drift in long videos. We introduce an attention sink                                      Figure 3. Vanilla RoPE vs RoPE with Reference-Anchored Posi-
+in the KV cache, where the KV pairs of the reference frame                                         tional Re-encoding (RAPR). RAPR improves long video generation
+x00 are permanently retained and never evicted. This ensures                                       without the need for long video training.
+the model can always attend to the original identity. We also
+find that extending the sink to include the first generated
+chunk {x̂1t }et=s
+               1
+                 1
+                   further improves consistency.                                                   RoPE index. 3) We synchronously shift the indices of all
+Reference-Anchored Positional Re-encoding. However,                                                other cached keys to maintain their correct relative positions
+adding Reference Sink alone is insufficient for maintaining                                        based on this capped distance. RoPE is then applied to these
+consistency in long video generation. We identify that this                                        re-calculated positions. RAPR provides two crucial benefits.
+limitation primarily arises from two critical issues induced                                       First, by capping the maximum distance D, it prevents atten-
+by the standard Rotary Positional Embedding (RoPE) [39]:                                           tion decay for distant frames, ensuring the model consistently
+1) Train–Test Mismatch: Vanilla RoPE assigns global frame                                          attends to the reference. Second, it mitigates the train–test
+indices as positional indices. As the model is trained only on                                     mismatch problem. By enabling RAPR during both training
+short clips (e.g., T frames), it never encounters the large po-                                    and inference, the model learns to operate within a finite
+sitional indices required for long-duration streaming, leading                                     positional-encoding space (defined by D < T ). This allows
+to catastrophic out-of-distribution issues. 2) Attention Decay:                                    the model to simulate long-video positional shifts during
+The long-term decay property inherent in RoPE causes the                                           training using only short clips, improving stability during
+attention scores toward the Reference Sink to diminish as the                                      extended inference.
+generation window moves further away, exacerbating iden-
+tity drift. To address this, we propose Reference-Anchored                                         3.1.2. Stage 2: Adversarial Refinement
+Positional Re-encoding (RAPR) (See Fig. 3). RAPR changes                                           After the Stage 1 distillation, we obtain a few-step causal gen-
+how positional indices are managed in the KV cache. The                                            erator capable of real-time, streaming generation. However,
+mechanism is as follows: 1) We store non-encoded keys in                                           due to the aggressive reduction in diffusion steps and archi-
+the KV cache. 2) When generating the current frame xt ,                                            tectural modifications, the distilled model may exhibit visual
+we calculate its capped distance to the reference x0 with                                          artifacts (e.g., blurring in hands or teeth) and temporal incon-
+a maximum limit D (i.e., min(t, D)), which serves as its                                           sistencies. To address these issues, we introduce an adver-
+
+
+
+                                                                                           10890
+                                            Audio                                                Fig. 4 shows the extended model architecture.
+       Time Video                         Wav2Vec 2.0               Audio Encoder                Audio Mask for Interaction Phase Identification. To dis-
+       step latent                                              0-1 audio mask
+                                                           ×                                     tinguish between speaking and listening phases, we adopt
+                                                                                                 an audio mask rather than audio track separation used in
+                Self-Attention                                                                   previous methods [67]. The audio mask is obtained through
+                                                 Talk feature             Listen feature
+                                                                                                 TalkNet [42], a joint audio–video detection method. We
+Text          Cross-Attention           Talk Audio Proj.        Listen Audio Proj.
+                                                                                                 observed that TalkNet provides more accurate temporal seg-
+                                                        Audio Attention Modules                  mentation than audio separation methods. Audio track sep-
+       Wan2.2-TI2V-5B
+
+
+
+
+                              Talk Audio Attention                                               aration modifies waveforms, often producing signals that
+         DiT Block
+
+
+
+
+                        +                                                                        deviate from the data distribution used in Wav2Vec 2.0 [1]
+                                                        Listen Audio Attention                   pretraining. Such deviations degrade the quality of extracted
+                        +                                                                        Wav2Vec features. The audio mask avoids this issue by pre-
+                                                                                     ×𝑁!"#       serving the original waveform while marking each frame
+                        FFN
+                                   ×𝑁!"#                                                         as either speaking (1) or listening (0). It is applied after
+                                                                                                 Wav2Vec feature extraction, where it multiplicatively mod-
+Figure 4. The architecture of our interactive human generation                                   ulates the extracted representations rather than altering the
+model. We extend the original video model with audio-related                                     raw waveform. This design maintains high-fidelity audio fea-
+modules to support talking and listening audio conditioning.                                     tures while providing precise temporal control over speaking
+                                                                                                 and listening intervals.
+                                                                                                 Integration within the Generation Framework. The
+sarial refinement stage featuring a novel consistency-aware                                      masked Wav2Vec features are injected into the video la-
+discriminator (see Fig. 2). We first follow prior works [21]                                     tent through two audio attention modules: 1) Talk Audio
+to initialize the discriminator from the pretrained teacher                                      Attention, which introduces talking cues to drive expressive
+model’s backbone, and insert NQ Querying Transformers                                            human motion during speaking segments. 2) Listen Audio
+(Q-Formers) [17] with learnable per-frame queries into the                                       Attention, which introduces listening cues to generate natural
+intermediate layers to extract deep features for each frame.                                     reactive behaviors during listening intervals. All other layers
+The discriminator’s logit output adopts a dual-branch de-                                        in the framework, such as self-attention and cross-attention,
+sign: 1) Local Realism Branch: applies a linear projection                                       remain audio-independent and focus on modeling visual and
+directly to the per-frame features, producing per-frame log-                                     contextual dependencies. Note that our method disables
+its that assess the realism of individual generated frames;                                      text-based control and instead allows the model to generate
+2) Global Consistency Branch: enforces identity and tem-                                         natural motions purely from the audio. Specifically, we fix
+poral consistency by applying cross-attention between the                                        the text prompt to “a person is speaking and listening.”
+reference frame’s feature and those of all subsequent frames,
+                                                                                                 Listen-and-Talk Generation Ability. By combining the
+followed by a linear projection to yield a single logit. This
+                                                                                                 base video model’s expressive generative capacity with
+global branch explicitly penalizes undesired deviation from
+                                                                                                 phase-specific audio conditioning enabled by the audio mask,
+the reference. We train the student generator against this
+                                                                                                 the system achieves natural interactive human generation.
+discriminator using a relativistic adversarial loss [16] and
+                                                                                                 It produces smooth transitions between speaking and listen-
+R1/R2 gradient penalty [34], as proposed in [13, 21]. Note
+                                                                                                 ing states and generates appropriate gestures and reactions,
+that different from the distillation stage, the adversarial stage
+                                                                                                 demonstrating realism and coherence far beyond traditional
+is trained with real video data, which directly optimize the
+                                                                                                 talk-only approaches. For additional details of this teacher
+generation distribution towards real distribution.
+                                                                                                 model, please refer to Appendix Sec. 6.
+3.2. Interactive Human Generation                                                                 4. Experiment
+Our aim is to develop a real-time, streaming human video
+                                                                                                  4.1. Experimental Setups
+model that supports natural interactive human behaviors in
+realistic scenes. We first train a bidirectional teacher model,                                  Dataset. Our data comes from a combination of SpeakerVid-
+and then distill it into a real-time causal model using our                                      5M [61] and self-collected videos. We sample and filter
+proposed framework. To start with, we adopt the Wan2.2-                                          ∼ 200 hours of 720P videos for training. To construct a
+TI2V-5B [47] with Nblk = 30 DiT blocks as the backbone.                                          balanced training set for both speaking and listening behav-
+Then, we propose an audio encoder which takes a raw au-                                          iors, we leverage the audio masks produced by TalkNet [42],
+dio clip and an audio mask as input and produce separated                                        which label each video frame as either speaking or listening.
+talking and listening features. We also extend the DiT block                                     For every clip, we compute the ratio of listening frames in
+with two audio attention modules to inject the audio features.                                   the detected audio mask. Clips with a high listening ratio
+
+
+
+                                                                                             10891
+are categorized as listening data, whereas clips with a low      4.2. Qualitative Results
+listening ratio are categorized as speaking data. By control-
+                                                                For talking avatar video generation, qualitative comparisons
+ling the proportion of clips selected from each category, we
+                                                                are shown in Fig. 5. EchoMimicV3 and Hallo3 exhibit no-
+ensure a balanced distribution of speaking and listening sam-
+                                                                ticeable distortions, particularly in the hand regions, and
+ples in the final dataset. In addition, we filter out samples
+                                                                suffer from error accumulation that leads to identity drift
+with extreme head orientations by detecting the face pose
+                                                                over long sequences. OmniAvatar produces stable results
+and discarding videos in which the subject’s head deviates
+                                                                with fewer distortions but shows the least motion dynam-
+excessively from a forward-facing direction.
+                                                                ics, largely preserving the posture of the reference frame.
+Implementation Details. For bidirectional teacher model         HunyuanVideo-Avatar and StableAvatar generate more dy-
+training, we finetune the base model for 20000 iterations       namic motions but occasionally introduce distortions; Sta-
+with a batch size of 32 and learning rate of 5e-6. For the      bleAvatar further produces artifacts such as subtitles and
+causal student model, we adopt the following set of parame-     jitters at sliding-window boundaries. In contrast, our method
+ters: denoising steps N = 3, chunk size C = 3, maximum          achieves realistic and consistent avatars with rich motion
+distance for RAPR D = 9, and the number of Q-Formers            dynamics while exhibiting fewer distortions.
+NQ = 3. The attention window is comprised of a 4-frame              For interactive avatar generation, qualitative comparisons
+Reference Sink and a 6-frame rolling KV-cache. In Stage 1,      with the baseline are shown in Fig. 6. During the talking
+we train the ODE initialization for 5000 iterations with a      phase, our method produces accurate lip movements with
+batch size of 8 and learning rate of 2e-6, followed by SiD      vivid gestures, while during the listening phase, it responds
+distillation for 6000 iterations with a batch size of 16 and    naturally to auditory cues. It also generates smooth and
+learning rate of 3e-6. In Stage 2, the adversarial refinement   realistic transitions between talking and listening. Compared
+is trained for 1400 iterations with a batch size of 32 and      to the baseline, which remains largely static during listening,
+learning rate of 5e-6. When pipelining the DiT denoising        our method exhibits greater expressiveness and realism.
+and VAE decoding on two H800 GPUs, our model achieves               Please refer to Appendix Sec. 7.4 and 7.5 for addi-
+real-time generation with a 1.2-second latency.                 tional comparisons with closed-source interactive baselines,
+Evaluation Metrics. We comprehensively evaluate our             Sec. 7.6 for long video generation results, and the demo
+model’s performance using multiple metrics. The Fréchet        video for more comparisons with all methods.
+Inception Distance (FID) [12] and Fréchet Video Distance
+(FVD) [46] assess the distributional similarity between gen-     4.3. Quantitative Results
+erated and real videos. Q-Align [50] evaluates image qual-      For talking video generation, we construct two evaluation
+ity (IQA) and aesthetic score (ASE), Sync-C and Sync-           datasets: 1) a short dataset consisting of 50 real avatar images
+D [6] measure audio–lip synchronization, while Hand Key-        paired with 5-second audio clips and ground-truth videos,
+point Variances (HKV) [33] quantify gesture dynamics. We        and 2) a long dataset consisting of 25 synthesized avatar im-
+also adopt the Human Anomaly (HA) score from VBench-            ages paired with 20-second audio clips. Quantitative results
+2.0 [62] to assess distortion in body, hands, and faces. To     for talking avatar video generation are reported in Table 1.
+evaluate the motion richness during listening, we compute       Despite being only a 3-step causal model and requiring sig-
+the variances of body, hand, and face keypoints observed dur-   nificantly less generation time, our method achieves superior
+ing the speaker’s listening phase, denoted as LBKV, LHKV,       or highly competitive performance across nearly all metrics,
+and LFKV, respectively.                                         demonstrating strong visual quality and accurate lip syn-
+Compared Baselines. We compare our model with state-of-         chronization. Notably, it achieves one of the largest motion
+the-art avatar video generation methods on both talking and     magnitudes while maintaining a lower anomaly rate, which
+interactive tasks. For talking video generation, we evaluate    is challenging to accomplish simultaneously. We also re-
+against Hallo3 [7], HunyuanVideo-Avatar (HY-Avatar) [4],        port results on the EMTD [33] dataset in Appendix Sec. 7.1.
+OmniAvatar [9], EchoMimicV3 [32], and StableAvatar [45].        For interactive avatar generation, we sample 50 videos from
+For interactive video generation, since no open-source full-    SpeakerVid-5M for evaluation. Tab. 2 presents the com-
+body interactive video generation method is currently avail-    parison results. Our method significantly outperforms the
+able, we implement a baseline based on OmniAvatar by            talking-only baseline across all metrics, demonstrating its
+feeding silent audio as the driving input during the listen-    ability to produce rich motions during listening. We also
+ing phase, and compare our method against it. We also           conduct a user study and real-time performance analysis,
+qualitatively compare with the recently proposed closed-        with detailed results in Appendix Sec. 7.3 and Sec. 8.
+source interactive head-and-shoulder avatar generation meth-
+ods INFP [67] and ARIG [11], as well as the closed-source
+                                                                4.4. Ablation Study
+streaming interactive full-body avatar generation methods       We evaluate the key components of our autoregressive distil-
+MIDAS [3] and X-Streamer [51].                                  lation framework and interactive model. Starting from Self
+
+
+
+                                                            10892
+                    3
+           cV                                                                                                         Distortion
+        imi
+                                                                                                                      Identity Drift
+      oM
+Ec h
+
+
+
+
+                                                                                                                     Ref Image
+          llo3
+      Ha
+             r
+         ata
+      Av
+    HY
+                         ar
+                      vat
+                   niA
+
+
+
+
+                                                                                                                     Ref Image
+                 Om
+
+               r
+           ata
+        Av
+    ble
+Sta
+             rs
+         Ou
+
+
+
+
+                              Figure 5. Qualitative comparison with SoTA talking avatar video generation methods. Please zoom in for details.
+
+    Listen                                                             [laughter]                                                                 [laughter]
+     Talk Announce what the results of the vote will be.                                                     You’re gonna stay up late.                                           According to the latest …
+        Baseline
+        Ours
+
+
+
+
+   Listen                                                                            Be confident.                                        Trust what you're doing is right.
+
+      Talk What have you learned in the           last,   last week?                Thank you.                              Yeah?                                             Where'd you learn that from?
+       Baseline
+       Ours
+
+
+
+
+Figure 6. Qualitative comparison with the baseline on interactive avatar video generation. While the baseline remains almost static
+during the listening phase, our avatar reacts naturally to the listening audio, showing fluid and realistic transitions between talking and
+listening. Notice how it responds to laughter in the first example and how its expressions and gestures shift seamlessly between phases.
+
+
+
+
+                                                                                                     10893
+Table 1. Quantitative comparison with SoTA talking avatar video generation methods. Metrics are reported on both short and long datasets,
+separated by “/”. Best in bold and second best underlined. FID/FVD for the long dataset is not applicable because the dataset is synthesized.
+We also report the number of denoising steps, resolution, and time taken to produce a 5-second video on a single H20 GPU for reference.
+
+ Method               FID        FVD          IQA          ASE       Sync-C       Sync-D          HKV            HA          Steps Res. Time
+ StableAvatar        75.20/ - 603.54/ -     4.66/4.87   3.02/3.83    4.24/2.90   10.92/11.57   42.92/38.06    0.909/0.963     40    480p 12min
+ OmniAvatar          87.24/ - 851.93/ -     4.45/4.66   2.85/3.74    7.60/6.47    7.99/8.98     8.64/15.17    0.974/0.974     25    480p 36min
+ HY-Avatar           76.49/ - 557.46/ -     4.67/4.80   3.00/3.78    6.71/5.98    8.79/8.58    54.31/80.46    0.947/0.975     50    720p 74min
+ Hallo3             117.41/ - 1009.27/ -    4.36/4.68   2.79/3.58    5.62/4.34    9.70/9.61    35.69/59.15    0.958/0.959     51    480p 32min
+ EchoMimicV3         78.65/ - 724.29/ -     4.66/4.87   3.02/3.90    3.10/2.20   10.63/11.64   25.53/41.31    0.969/0.937     25    480p 7min
+ Ours (baseline)     96.58/ -   885.97/ -   4.29/4.01   2.75/3.13    7.04/5.99    8.34/8.36    67.65/111.69   0.948/0.971
+ +ref sink           88.75/ -   772.10/ -   4.55/4.64   2.93/3.64    7.03/5.82    8.39/8.27    75.94/102.16   0.950/0.973
+ +RAPR               81.63/ -   753.46/ -   4.64/4.84   2.98/3.81    7.06/5.99    8.34/8.18     48.29/61.07   0.956/0.961
+ +GAN w/o DCA        79.68/ -   741.30/ -   4.65/4.91   3.02/3.80    7.05/6.38    8.31/8.15     35.50/29.85   0.947/0.993
+ Ours                74.21/ - 707.34/ - 4.68/4.94       3.03/3.91    7.06/6.64    8.21/8.14    48.35/65.77    0.974/0.993      3    720p   20s
+
+
+  Table 2. Quantitative results for interactive avatar generation.                     Table 3. Ablation on the audio mask position.
+
+           Method       LBKV         LHKV         LFKV                                   Method               LBKV          LHKV      LFKV
+           Baseline       6.05         4.53         2.39                         Pre-Mask (undistilled)       16.98         15.49      5.72
+            Ours         15.88        16.24         7.11                           Ours (undistilled)         17.74         21.44      5.81
+
+
+                                                                              5. Conclusion
+Forcing [14] as (Ours (baseline)), we incrementally add the
+Reference Sink (+Ref Sink), the RAPR strategy (+RAPR),                        In this paper, we address three major challenges in current
+adversarial refinement with a standard discriminator (+GAN                    human video avatars. For real-time streaming generation,
+w/o DCA ), and finally our consistency-aware discriminator                    we propose a two-stage autoregressive adaptation and ac-
+(Ours). Tab. 1 shows the quantitative results; please also                    celeration framework with a distillation and an adversarial
+refer to Appendix Tab. 4, Fig. 7, and the demo video for                      refinement process. For stable and consistent long video gen-
+additional results. The baseline fails to preserve identity                   eration, we introduce Reference Sink, Reference-Anchored
+and drifts over time. Introducing the Reference Sink im-                      Positional Re-encoding, and a consistency-aware discrim-
+proves identity preservation but remains insufficient for long-               inator. Finally, to enable natural interaction, we develop
+duration generation. The RAPR strategy further enhances                       StreamAvatar, a real-time, streaming human video model
+temporal consistency in long sequences, though occasional                     that generates both talking and listening behaviors with co-
+blur and distortion persist. Applying adversarial refinement                  herent expressions, gestures, and transitions. Extensive ex-
+without the consistency-aware discriminator yields worse                      periments demonstrate that StreamAvatar achieves state-of-
+consistency. Note that although some ablation variants ex-                    the-art performance while operating significantly faster than
+hibit larger motion dynamics, this often comes at the cost of                 competitive methods.
+distorted or blurry frames, as reflected by the IQA and ASE                   Limitations and Future Work. Despite its strong perfor-
+scores. Overall, each added component brings improvement,                     mance, our method has several limitations: 1) Due to the
+validating our design.                                                        limited temporal context, it may produce inconsistent con-
+   To evaluate the effectiveness of our design regarding                      tent in regions that remain occluded for an extended period.
+where the audio mask is applied, we introduce a “Pre-Mask”                    Incorporating long-term memory mechanisms could allevi-
+variant, which applies the audio mask to the raw audio before                 ate this issue. 2) While already outperforming most offline
+feeding it into Wav2Vec for feature extraction. In contrast,                  baselines in motion dynamics, the distillation process in-
+“Ours” applies the audio mask to the features extracted by                    evitably constrains the range of motion. Additionally, the
+Wav2Vec. To reduce computational cost, we conduct ex-                         current text input handling is relatively simplistic, limiting
+periments using the undistilled model. As shown in Tab. 3,                    fine-grained semantic control. Future work could leverage
+“Ours” outperforms “Pre-Mask” across all metrics. This indi-                  multimodal large language models for semantic planning
+cates that applying the audio mask directly to the audio de-                  to further enrich motion diversity and interactivity. 3) VAE
+grades the resulting Wav2Vec features and ultimately harms                    decoding currently accounts for more than half of the total
+model performance, thereby validating the effectiveness of                    processing time. Exploring more efficient VAE decoding
+our design.                                                                   could further reduce streaming latency.
+
+
+
+                                                                       10894
+Acknowledgements                                                     [13] Nick Huang, Aaron Gokaslan, Volodymyr Kuleshov, and
+                                                                          James Tompkin. The GAN is dead; long live the gan! A
+This work was supported by the Natural Science Foundation                 modern GAN baseline. In NeurIPS, 2024. 5
+of China (62461160309).                                              [14] Xun Huang, Zhengqi Li, Guande He, Mingyuan Zhou, and
+                                                                          Eli Shechtman. Self forcing: Bridging the train-test gap in
+References                                                                autoregressive video diffusion. CoRR, abs/2506.08009, 2025.
+                                                                          3, 4, 8
+ [1] Alexei Baevski, Yuhao Zhou, Abdelrahman Mohamed, and
+     Michael Auli. wav2vec 2.0: A framework for self-supervised      [15] Xiaozhong Ji, Xiaobin Hu, Zhihong Xu, Junwei Zhu, Chum-
+     learning of speech representations. In NeurIPS, 2020. 5, 1           ing Lin, Qingdong He, Jiangning Zhang, Donghao Luo, Yi
+ [2] Boyuan Chen, Diego Marti Monso, Yilun Du, Max Sim-                   Chen, Qin Lin, Qinglin Lu, and Chengjie Wang. Sonic: Shift-
+     chowitz, Russ Tedrake, and Vincent Sitzmann. Diffusion               ing focus to global audio perception in portrait animation. In
+     forcing: Next-token prediction meets full-sequence diffusion.        CVPR, pages 193–203. Computer Vision Foundation / IEEE,
+     In NeurIPS, 2024. 3                                                  2025. 1, 2
+ [3] Ming Chen, Liyuan Cui, Wenyuan Zhang, Haoxian Zhang,            [16] Alexia Jolicoeur-Martineau. The relativistic discriminator: a
+     Yan Zhou, Xiaohan Li, Songlin Tang, Jiwen Liu, Borui Liao,           key element missing from standard GAN. In ICLR (Poster).
+     Hejia Chen, Xiaoqiang Liu, and Pengfei Wan. MIDAS: mul-              OpenReview.net, 2019. 5
+     timodal interactive digital-human synthesis via real-time au-   [17] Junnan Li, Dongxu Li, Silvio Savarese, and Steven C. H.
+     toregressive video generation. CoRR, abs/2508.19320, 2025.           Hoi. BLIP-2: bootstrapping language-image pre-training
+     3, 6                                                                 with frozen image encoders and large language models. In
+ [4] Yi Chen, Sen Liang, Zixiang Zhou, Ziyao Huang, Yifeng                ICML, pages 19730–19742. PMLR, 2023. 5
+     Ma, Junshu Tang, Qin Lin, Yuan Zhou, and Qinglin Lu.            [18] Jiahe Li, Jiawei Zhang, Xiao Bai, Jin Zheng, Xin Ning, Jun
+     Hunyuanvideo-avatar: High-fidelity audio-driven human ani-           Zhou, and Lin Gu. Talkinggaussian: Structure-persistent 3d
+     mation for multiple characters. CoRR, abs/2505.20156, 2025.          talking head synthesis via gaussian splatting. In ECCV (10),
+     1, 2, 6                                                              pages 127–145. Springer, 2024. 2
+ [5] Zhiyuan Chen, Jiajiong Cao, Zhiquan Chen, Yuming Li, and        [19] Gaojie Lin, Jianwen Jiang, Chao Liang, Tianyun Zhong, Jiaqi
+     Chenguang Ma. Echomimic: Lifelike audio-driven portrait              Yang, and Yanbo Zheng. Cyberhost: Taming audio-driven
+     animations through editable landmark conditions. In AAAI,            avatar diffusion model with region codebook attention. CoRR,
+     pages 2403–2410. AAAI Press, 2025. 2                                 abs/2409.01876, 2024. 2
+ [6] Joon Son Chung and Andrew Zisserman. Out of time: Auto-         [20] Gaojie Lin, Jianwen Jiang, Jiaqi Yang, Zerong Zheng, and
+     mated lip sync in the wild. In ACCV Workshops (2), pages             Chao Liang. Omnihuman-1: Rethinking the scaling-up of
+     251–263. Springer, 2016. 6                                           one-stage conditioned human animation models. CoRR,
+ [7] Jiahao Cui, Hui Li, Yun Zhan, Hanlin Shang, Kaihui Cheng,            abs/2502.01061, 2025. 1, 2
+     Yuqi Ma, Shan Mu, Hang Zhou, Jingdong Wang, and Siyu            [21] Shanchuan Lin, Xin Xia, Yuxi Ren, Ceyuan Yang, Xuefeng
+     Zhu. Hallo3: Highly dynamic and realistic portrait image             Xiao, and Lu Jiang. Diffusion adversarial post-training for
+     animation with video diffusion transformer. In CVPR, pages           one-step video generation. CoRR, abs/2501.08316, 2025. 5
+     21086–21095. Computer Vision Foundation / IEEE, 2025. 1,
+                                                                     [22] Shanchuan Lin, Ceyuan Yang, Hao He, Jianwen Jiang, Yuxi
+     2, 6
+                                                                          Ren, Xin Xia, Yang Zhao, Xuefeng Xiao, and Lu Jiang. Au-
+ [8] Justin Cui, Jie Wu, Ming Li, Tao Yang, Xiaojie Li, Rui
+                                                                          toregressive adversarial post-training for real-time interactive
+     Wang, Andrew Bai, Yuanhao Ban, and Cho-Jui Hsieh. Self-
+                                                                          video generation. CoRR, abs/2506.09350, 2025. 3
+     forcing++: Towards minute-scale high-quality video genera-
+     tion, 2025. 3                                                   [23] Yaron Lipman, Ricky T. Q. Chen, Heli Ben-Hamu, Maximil-
+                                                                          ian Nickel, and Matthew Le. Flow matching for generative
+ [9] Qijun Gan, Ruizi Yang, Jianke Zhu, Shaofei Xue, and Steven
+                                                                          modeling. In ICLR. OpenReview.net, 2023. 1
+     Hoi. Omniavatar: Efficient audio-driven avatar video genera-
+     tion with adaptive body animation. CoRR, abs/2506.18866,        [24] Pengfei Liu, Wenjin Deng, Hengda Li, Jintai Wang, Yinglin
+     2025. 1, 2, 6                                                        Zheng, Yiwei Ding, Xiaohu Guo, and Ming Zeng. Musicface:
+[10] Yudong Guo, Keyu Chen, Sen Liang, Yong-Jin Liu, Hujun                Music-driven expressive singing face synthesis. Comput. Vis.
+     Bao, and Juyong Zhang. Ad-nerf: Audio driven neural ra-              Media, 10(1):119–136, 2023. 2
+     diance fields for talking head synthesis. In ICCV, pages        [25] Xingchao Liu, Chengyue Gong, and Qiang Liu. Flow straight
+     5764–5774. IEEE, 2021. 2                                             and fast: Learning to generate and transfer data with rectified
+[11] Ying Guo, Xi Liu, Cheng Zhen, Pengfei Yan, and Xiaoming              flow. In ICLR. OpenReview.net, 2023. 1
+     Wei. ARIG: autoregressive interactive head generation for       [26] Xi Liu, Ying Guo, Cheng Zhen, Tong Li, Yingying Ao, and
+     real-time conversations. CoRR, abs/2507.00472, 2025. 2, 3,           Pengfei Yan. Customlistener: Text-guided responsive inter-
+     6                                                                    action for user-friendly listening head generation. In CVPR,
+[12] Martin Heusel, Hubert Ramsauer, Thomas Unterthiner, Bern-            pages 2415–2424. IEEE, 2024. 2, 3
+     hard Nessler, and Sepp Hochreiter. Gans trained by a two        [27] Chetwin Low and Weimin Wang. Talkingmachines: Real-
+     time-scale update rule converge to a local nash equilibrium.         time audio-driven facetime-style video via autoregressive dif-
+     In NIPS, pages 6626–6637, 2017. 6                                    fusion models. CoRR, abs/2506.03099, 2025. 3
+
+
+
+
+                                                                 10895
+[28] Yu Luo, Chaolin Yang, Zhiyi Lin, Jie Ling, Lifa Sun, Jinghua      [42] Ruijie Tao, Zexu Pan, Rohan Kumar Das, Xinyuan Qian,
+     Zhong, and Tian Han. Ldswap: A semantic-related latent code            Mike Zheng Shou, and Haizhou Li. Is someone speaking?:
+     disentangling method in stylespace towards high-resolution             Exploring long-term temporal features for audio-visual active
+     face swapping. Comput. Vis. Media, 11(5):1041–1058, 2025.              speaker detection. In ACM Multimedia, pages 3927–3935.
+     1                                                                      ACM, 2021. 5
+[29] Boyao Ma, Yuanping Cao, and Lei Zhang. Decoupled two-             [43] Linrui Tian, Qi Wang, Bang Zhang, and Liefeng Bo. EMO:
+     stage talking head generation via gaussian-landmark-based              emote portrait alive generating expressive portrait videos with
+     neural radiance fields. Comput. Vis. Media, 11(4):799–816,             audio2video diffusion model under weak conditions. In ECCV
+     2025. 2                                                                (83), pages 244–260. Springer, 2024. 1, 2
+[30] Yifeng Ma, Suzhen Wang, Zhipeng Hu, Changjie Fan, Tangjie         [44] Minh Tran, Di Chang, Maksim Siniukov, and Mohammad
+     Lv, Yu Ding, Zhidong Deng, and Xin Yu. Styletalk: One-shot             Soleymani. DIM: dyadic interaction modeling for social
+     talking head generation with controllable speaking styles. In          behavior generation. In ECCV (37), pages 484–503. Springer,
+     AAAI, pages 1896–1904. AAAI Press, 2023. 2                             2024. 3
+[31] Yifeng Ma, Jinwei Qi, Chaonan Ji, Peng Zhang, Bang Zhang,         [45] Shuyuan Tu, Yueming Pan, Yinming Huang, Xintong Han,
+     Zhidong Deng, and Liefeng Bo. Exploring timeline control               Zhen Xing, Qi Dai, Chong Luo, Zuxuan Wu, and Yu-Gang
+     for facial motion generation. In CVPR, pages 1940–1950.                Jiang. Stableavatar: Infinite-length audio-driven avatar video
+     Computer Vision Foundation / IEEE, 2025. 2                             generation. CoRR, abs/2508.08248, 2025. 1, 2, 6
+[32] Rang Meng, Yan Wang, Weipeng Wu, Ruobing Zheng, Yum-              [46] Thomas Unterthiner, Sjoerd van Steenkiste, Karol Kurach,
+     ing Li, and Chenguang Ma. Echomimicv3: 1.3b parameters                 Raphaël Marinier, Marcin Michalski, and Sylvain Gelly. FVD:
+     are all you need for unified multi-modal and multi-task human          A new metric for video generation. In DGS@ICLR. OpenRe-
+     animation. CoRR, abs/2507.03905, 2025. 1, 2, 6                         view.net, 2019. 6
+[33] Rang Meng, Xingyu Zhang, Yuming Li, and Chenguang Ma.             [47] Team Wan, Ang Wang, Baole Ai, Bin Wen, Chaojie Mao,
+     Echomimicv2: Towards striking, simplified, and semi-body               Chen-Wei Xie, Di Chen, Feiwu Yu, Haiming Zhao, Jianx-
+     human animation. In CVPR, pages 5489–5498. Computer                    iao Yang, Jianyuan Zeng, Jiayu Wang, Jingfeng Zhang, Jin-
+     Vision Foundation / IEEE, 2025. 2, 6, 1                                gren Zhou, Jinkai Wang, Jixuan Chen, Kai Zhu, Kang Zhao,
+[34] Lars M. Mescheder, Andreas Geiger, and Sebastian Nowozin.              Keyu Yan, Lianghua Huang, Mengyang Feng, Ningyi Zhang,
+     Which training methods for gans do actually converge? In               Pandeng Li, Pingyu Wu, Ruihang Chu, Ruili Feng, Shiwei
+     ICML, pages 3478–3487. PMLR, 2018. 5                                   Zhang, Siyang Sun, Tao Fang, Tianxing Wang, Tianyi Gui,
+[35] Evonne Ng, Hanbyul Joo, Liwen Hu, Hao Li, Trevor Darrell,              Tingyu Weng, Tong Shen, Wei Lin, Wei Wang, Wei Wang,
+     Angjoo Kanazawa, and Shiry Ginosar. Learning to listen:                Wenmeng Zhou, Wente Wang, Wenting Shen, Wenyuan Yu,
+     Modeling non-deterministic dyadic facial motion. In CVPR,              Xianzhong Shi, Xiaoming Huang, Xin Xu, Yan Kou, Yangyu
+     pages 20363–20373. IEEE, 2022. 2, 3                                    Lv, Yifei Li, Yijing Liu, Yiming Wang, Yingya Zhang, Yi-
+[36] William Peebles and Saining Xie. Scalable diffusion models             tong Huang, Yong Li, You Wu, Yu Liu, Yulin Pan, Yun
+     with transformers. In ICCV, pages 4172–4182. IEEE, 2023.               Zheng, Yuntao Hong, Yupeng Shi, Yutong Feng, Zeyinzi
+     3                                                                      Jiang, Zhen Han, Zhi-Fan Wu, and Ziyu Liu. Wan: Open and
+[37] Ziqiao Peng, Wentao Hu, Junyuan Ma, Xiangyu Zhu, Xi-                   advanced large-scale video generative models. arXiv preprint
+     aomei Zhang, Hao Zhao, Hui Tian, Jun He, Hongyan Liu,                  arXiv:2503.20314, 2025. 5, 1
+     and Zhaoxin Fan. Synctalk++: High-fidelity and efficient          [48] Mengchao Wang, Qiang Wang, Fan Jiang, Yaqi Fan, Yunpeng
+     synchronized talking heads synthesis using gaussian splatting.         Zhang, Yonggang Qi, Kun Zhao, and Mu Xu. Fantasytalk-
+     CoRR, abs/2506.14742, 2025. 2                                          ing: Realistic talking portrait generation via coherent motion
+[38] K. R. Prajwal, Rudrabha Mukhopadhyay, Vinay P. Nambood-                synthesis. CoRR, abs/2504.04842, 2025. 1, 2
+     iri, and C. V. Jawahar. A lip sync expert is all you need for     [49] Yinuo Wang, Yanbo Fan, Xuan Wang, Yu Guo, and Fei Wang.
+     speech to lip generation in the wild. In ACM Multimedia,               Diffusion-based realistic listening head generation via hybrid
+     pages 484–492. ACM, 2020. 2                                            motion modeling. In CVPR, pages 15885–15895. Computer
+[39] Jianlin Su, Murtadha H. M. Ahmed, Yu Lu, Shengfeng Pan,                Vision Foundation / IEEE, 2025. 2, 3
+     Wen Bo, and Yunfeng Liu. Roformer: Enhanced trans-                [50] Haoning Wu, Zicheng Zhang, Weixia Zhang, Chaofeng Chen,
+     former with rotary position embedding. Neurocomputing,                 Liang Liao, Chunyi Li, Yixuan Gao, Annan Wang, Erli Zhang,
+     568:127063, 2024. 4                                                    Wenxiu Sun, Qiong Yan, Xiongkuo Min, Guangtao Zhai, and
+[40] Zhiyao Sun, Tian Lv, Sheng Ye, Matthieu Gaetan Lin, Jenny              Weisi Lin. Q-align: Teaching lmms for visual scoring via
+     Sheng, Yu-Hui Wen, Minjing Yu, and Yong-Jin Liu. Diff-                 discrete text-defined levels. In ICML. OpenReview.net, 2024.
+     posetalk: Speech-driven stylistic 3d facial animation and head         6
+     pose generation via diffusion models. ACM Trans. Graph.,          [51] You Xie, Tianpei Gu, Zenan Li, Chenxu Zhang, Guoxian
+     43(4):46:1–46:9, 2024. 1                                               Song, Xiaochen Zhao, Chao Liang, Jianwen Jiang, Hongyi
+[41] Zhiyao Sun, Yu-Hui Wen, Ho-Jui Fang, Sheng Ye, Matthieu                Xu, and Linjie Luo. X-streamer: Unified human world mod-
+     Lin, Tian Lv, and Yong-Jin Liu. A text-to-3d framework for             eling with audiovisual interaction. CoRR, abs/2509.21574,
+     joint generation of cg-ready humans and compatible garments.           2025. 3, 6
+     IEEE Transactions on Visualization and Computer Graphics,         [52] Sicheng Xu, Guojun Chen, Yu-Xiao Guo, Jiaolong Yang,
+     pages 1–12, 2026. 1                                                    Chong Li, Zhenyu Zang, Yizhong Zhang, Xin Tong, and
+
+
+
+
+                                                                  10896
+     Baining Guo. VASA-1: lifelike audio-driven talking faces          [65] Mingyuan Zhou, Huangjie Zheng, Zhendong Wang,
+     generated in real time. In NeurIPS, 2024. 2                            Mingzhang Yin, and Hai Huang. Score identity distillation:
+[53] Shuai Yang, Wei Huang, Ruihang Chu, Yicheng Xiao,                      Exponentially fast distillation of pretrained diffusion models
+     Yuyang Zhao, Xianbang Wang, Muyang Li, Enze Xie,                       for one-step generation. In ICML. OpenReview.net, 2024. 3
+     Yingcong Chen, Yao Lu, Song Han, and Yukang Chen.                 [66] Yang Zhou, Dingzeyu Li, Xintong Han, Evangelos
+     Longlive: Real-time interactive long video generation. CoRR,           Kalogerakis, Eli Shechtman, and Jose Echevarria.
+     abs/2509.22622, 2025. 3                                                Makeittalk:      Speaker-aware talking head animation.
+[54] Zhenhui Ye, Ziyue Jiang, Yi Ren, Jinglin Liu, Jinzheng He,             CoRR, abs/2004.12992, 2020. 2
+     and Zhou Zhao. Geneface: Generalized and high-fidelity            [67] Yongming Zhu, Longhao Zhang, Zhengkun Rong, Tianshu
+     audio-driven 3d talking face synthesis. In ICLR. OpenRe-               Hu, Shuang Liang, and Zhipeng Ge. INFP: audio-driven
+     view.net, 2023. 2                                                      interactive head generation in dyadic conversations. In CVPR,
+[55] Tianwei Yin, Michaël Gharbi, Richard Zhang, Eli Shecht-               pages 10667–10677. Computer Vision Foundation / IEEE,
+     man, Frédo Durand, William T. Freeman, and Taesung Park.              2025. 2, 3, 5, 6
+     One-step diffusion with distribution matching distillation. In
+     CVPR, pages 6613–6623. IEEE, 2024. 3
+[56] Tianwei Yin, Qiang Zhang, Richard Zhang, William T. Free-
+     man, Frédo Durand, Eli Shechtman, and Xun Huang. From
+     slow bidirectional to fast autoregressive video diffusion mod-
+     els. In CVPR, pages 22963–22974. Computer Vision Founda-
+     tion / IEEE, 2025. 3, 4
+[57] Haojie Yu, Zhaonian Wang, Yihan Pan, Meng Cheng, Hao
+     Yang, Chao Wang, Tao Xie, Xiaoming Xu, Xiaoming Wei,
+     and Xunliang Cai. LLIA - enabling low-latency interactive
+     avatars: Real-time audio-driven portrait video generation with
+     diffusion models. CoRR, abs/2506.05806, 2025. 3
+[58] Chenxu Zhang, Chao Wang, Jianfeng Zhang, Hongyi Xu,
+     Guoxian Song, You Xie, Linjie Luo, Yapeng Tian, Jiashi
+     Feng, and Xiaohu Guo. Magictalk: Implicit and explicit
+     correlation learning for diffusion-based emotional talking
+     face generation. Comput. Vis. Media, 11(4):763–779, 2025. 2
+[59] Qian Zhang, Vikas Thamizharasan, and James Tompkin.
+     Learning physically based material and lighting decompo-
+     sitions for face editing. Comput. Vis. Media, 10(2):295–308,
+     2024. 1
+[60] Wenxuan Zhang, Xiaodong Cun, Xuan Wang, Yong Zhang,
+     Xi Shen, Yu Guo, Ying Shan, and Fei Wang. Sadtalker:
+     Learning realistic 3d motion coefficients for stylized audio-
+     driven single image talking face animation. In CVPR, pages
+     8652–8661. IEEE, 2023. 1, 2
+[61] Youliang Zhang, Zhaoyang Li, Duomin Wang, Jiahe Zhang,
+     Deyu Zhou, Zixin Yin, Xili Dai, Gang Yu, and Xiu
+     Li. Speakervid-5m: A large-scale high-quality dataset for
+     audio-visual dyadic interactive human generation. CoRR,
+     abs/2507.09862, 2025. 5
+[62] Dian Zheng, Ziqi Huang, Hongbo Liu, Kai Zou, Yinan He,
+     Fan Zhang, Yuanhan Zhang, Jingwen He, Wei-Shi Zheng,
+     Yu Qiao, and Ziwei Liu. Vbench-2.0: Advancing video gen-
+     eration benchmark suite for intrinsic faithfulness. CoRR,
+     abs/2503.21755, 2025. 6
+[63] Hang Zhou, Yasheng Sun, Wayne Wu, Chen Change Loy,
+     Xiaogang Wang, and Ziwei Liu. Pose-controllable talking
+     face generation by implicitly modularized audio-visual rep-
+     resentation. In CVPR, pages 4176–4186. Computer Vision
+     Foundation / IEEE, 2021. 2
+[64] Mohan Zhou, Yalong Bai, Wei Zhang, Ting Yao, Tiejun Zhao,
+     and Tao Mei. Responsive listening head generation: A bench-
+     mark dataset and baseline. In ECCV (38), pages 124–142.
+     Springer, 2022. 2, 3
+
+
+
+
+                                                                  10897
+

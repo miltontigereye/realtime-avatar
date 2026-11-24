@@ -17,3 +17,5 @@ To regenerate the source snapshot from a local checkout into a new directory:
 ```bash
 python tools/export_research_sources.py /path/to/RealTime-Avatar /path/to/new-export/research
 ```
+
+The complete reference papers, including figures and equations, are in [`docs/papers/`](docs/papers/). Lossless PDF copies are paired with searchable text under `docs/papers/text/`. See the paper manifest for compression and verification details.
