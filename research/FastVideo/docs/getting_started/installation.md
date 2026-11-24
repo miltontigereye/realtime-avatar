@@ -1,0 +1,99 @@
+
+# 🔧 Installation
+
+Start with [Hardware and runtimes](hardware.md) to distinguish NVIDIA RTX and
+data center GPUs, DGX Spark, Apple Silicon MLX, and AMD ROCm.
+
+The installation paths below cover:
+
+- [NVIDIA CUDA](installation/gpu.md)
+- **NVIDIA DGX Spark / GB10 (ARM64 + CUDA 13)** — [install](installation/spark.md),
+  [performance](installation/spark_performance.md),
+  [pair two Sparks](installation/spark_pair.md)
+- [Apple silicon (MLX)](installation/mlx.md)
+- [AMD / ROCm support and current limits](installation/amd.md)
+
+## Quick Installation
+
+### Using uv (recommended)
+
+Use uv as the default environment manager for faster and more stable installs.
+The commands below target NVIDIA CUDA 12; use `UV_TORCH_BACKEND=cu130` on
+CUDA 13. Apple silicon users should follow the [MLX install guide](installation/mlx.md).
+
+```bash
+# Create and activate a new uv environment
+uv venv --python 3.12 --seed
+source .venv/bin/activate
+
+UV_TORCH_BACKEND=cu126 uv pip install fastvideo
+```
+
+### Using Conda (alternative)
+
+```bash
+# Create and activate a new conda environment
+conda create -n fastvideo python=3.12 -y
+conda activate fastvideo
+
+UV_TORCH_BACKEND=cu126 uv pip install fastvideo
+```
+
+### From source
+
+FastVideo pins PyTorch 2.12.0. Select its CUDA build explicitly with
+`UV_TORCH_BACKEND=cu126` for CUDA 12 or `UV_TORCH_BACKEND=cu130` for CUDA 13.
+
+```bash
+git clone https://github.com/hao-ai-lab/FastVideo.git
+cd FastVideo
+UV_TORCH_BACKEND=cu126 uv pip install -e .
+
+# optional: install flash-attn
+uv pip install flash-attn --no-build-isolation -v
+```
+
+Alternative with Conda environment (still drives installs through `uv`):
+
+```bash
+UV_TORCH_BACKEND=cu126 uv pip install -e .
+uv pip install flash-attn --no-build-isolation -v
+```
+
+## Install with an AI coding agent
+
+FastVideo is a monorepo with rich agent guidance (see
+[`AGENTS.md`](https://github.com/hao-ai-lab/FastVideo/blob/main/AGENTS.md)).
+If you use Claude Code, Cursor, or another coding agent, paste the prompt
+below; it detects your platform and follows the matching guide:
+
+```text
+Install FastVideo (https://github.com/hao-ai-lab/FastVideo) into a fresh uv virtual environment.
+
+1. Detect the platform: run `uname -m`, `nvidia-smi`, and `nvcc --version`.
+2. Read and follow the matching install guide exactly (in this repo, or at
+   https://hao-ai-lab.github.io/FastVideo/getting_started/installation/):
+     - NVIDIA GPU, x86_64                         -> docs/getting_started/installation/gpu.md
+     - NVIDIA DGX Spark / GB10, aarch64, CUDA 13  -> docs/getting_started/installation/spark.md
+     - Apple Silicon, macOS                       -> docs/getting_started/installation/mlx.md
+3. Use uv for every step. If a command fails, debug it and tell me what you changed.
+4. Verify the result:
+     python -c "import fastvideo, torch; print('cuda', torch.cuda.is_available())"
+     fastvideo --help
+5. Report which platform you detected and any deviations you had to make.
+```
+
+## Requirements
+
+- **Python**: 3.10-3.12 is the tested and recommended range (the commands
+  above pin 3.12)
+- **NVIDIA GPUs**: CUDA 12.6+ with compute capability 7.0+
+- **Apple Silicon**: macOS 14.0+ with M1/M2/M3/M4 chips
+- **CPU**: x86_64 architecture (for CPU-only inference)
+
+## Next Steps
+
+- [Quick Start](quick_start.md) - Generate your first video
+- [Inference Cookbook](../cookbook/index.md) - Choose a maintained recipe
+- [Configuration](../inference/configuration.md) - Learn about configuration options
+- [Examples](../inference/examples/examples_inference_index.md) - Explore scripts and notebooks

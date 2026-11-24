@@ -1,0 +1,15 @@
+{
+  "sr_segment_length": 81,
+  "infer_steps": 1,
+  "fps": 16,
+  "model_size": "7b",
+  "dit_original_ckpt": "/path/to/seedvr2_ema_7b.pth",
+  "use_tiling_vae": true,
+  "cpu_offload": true,
+  "offload_granularity": "block",
+  "color_fix": "gpu",
+  "request_defaults": {
+    "size": [1080, 1920],
+    "match_target_size": false
+  }
+}

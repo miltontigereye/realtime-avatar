@@ -1,0 +1,275 @@
+# OpenAI-compatible HTTP contract
+
+FastVideo exposes one model-agnostic REST engine for image and video models.
+Launch it from a typed serve config:
+
+```bash
+fastvideo serve --config examples/serving/openai_fasth3.yaml
+```
+
+All generation routes share one serialized engine. FastVideo pipelines mutate
+per-request sampling state, and some adapters merge weights at load time, so a
+single loaded pipeline is never entered concurrently by image and video
+requests. HTTP handling and job polling remain asynchronous.
+
+`GET /v1/model_info` includes `video_output_capabilities` for MiniMax-H3
+(including FastH3 and Omni) and Pika H3 Flex. Version 1 reports the 24 fps
+frame grid, integer duration choices from 5 to 15 seconds, recommended
+480p/768p width/height pairs by aspect ratio, and the `tasks` this server
+accepts. A Ref2VA server also reports `reference_limits`. Other families return
+`null`.
+The family is resolved from the registry and local checkpoints only, so
+discovery never downloads a Hub manifest.
+These values describe model geometry, independently of the serve file's
+default request. `recommended_frame_sizes` is not an exhaustive canvas list,
+and `hardware_capacity_verified: false` means the response does not establish
+that every resolution, duration and reference combination fits the device.
+Sampling schedules, attention and memory policies are unchanged by discovery.
+
+## Endpoints
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/v1/models` | List the served model and optional startup adapter |
+| `GET` | `/v1/models/{model}` | Retrieve one served model card |
+| `GET` | `/v1/model_state` | Report the loaded catalog model (catalog servers) |
+| `POST` | `/v1/models/load` | Load a catalog model/task (catalog servers) |
+| `POST` | `/v1/models/unload` | Unload the catalog model (catalog servers) |
+| `POST` | `/v1/videos` | Submit an asynchronous video job |
+| `POST` | `/v1/videos/sync` | Generate and return an MP4 response directly |
+| `GET` | `/v1/videos` | List in-memory jobs with `after`, `limit`, and `order` |
+| `GET` | `/v1/videos/{id}` | Retrieve job status and metadata |
+| `GET` | `/v1/videos/{id}/content` | Download a completed MP4 |
+| `GET` | `/v1/videos/{id}/draft_bundle` | Download the MiniMax-H3 draft bundle of a video created with `return_draft_bundle` |
+| `DELETE` | `/v1/videos/{id}` | Delete a job and its completed artifact |
+| `POST` | `/v1/images` | Generate an image |
+| `POST` | `/v1/images/generations` | OpenAI-compatible alias for image generation |
+| `POST` | `/v1/images/edits` | Generate an image from image references |
+| `GET` | `/v1/images/{id}/content` | Download a generated image |
+| `GET` | `/health` | Liveness probe |
+
+`POST /v1/videos/generations` remains an alias for older FastVideo clients, and
+`POST /v1/images/generations` is the OpenAI Python client's image generation path.
+The OpenAI Python and JavaScript clients can create, retrieve, list, download,
+and delete video jobs. Use the [H3 server cookbook](../../cookbook/openai-api.md)
+for pinned client versions and executable examples. Download variants other
+than `video` return HTTP 400. Remix, extensions, and characters are not implemented.
+
+An H3 text-to-video/audio server also serves `/playground/`. This same-origin
+browser client uses the video routes above and shares their loaded pipeline.
+`GET /playground/config` reports the model alias and operator-explicit sampling
+defaults. The playground does not add authentication or a second model process.
+
+For native FastH3 MLX, launch
+`python -m fastvideo.entrypoints.openai.mlx_server --config examples/serving/mlx_fasth3.yaml`.
+This adapter shares the video-job API and executes pipeline calls on one MLX
+thread. It rejects unsupported options before media fetching or job creation.
+Image routes are not mounted. MLX keeps its existing phase-memory policy, so a
+persistent server does not imply persistent residency of all model weights.
+
+## Video requests
+
+The canonical shape follows vLLM-Omni and accepts SGLang's common flat
+extensions. Fields that FastVideo cannot represent for the loaded model fail
+at admission with HTTP 400 instead of creating a job that later fails.
+
+```json
+{
+  "model": "fasth3",
+  "prompt": "A fox runs through fresh snow.",
+  "seconds": "5",
+  "size": "1344x768",
+  "video_params": {
+    "fps": 24,
+    "num_frames": 124
+  },
+  "seed": 42,
+  "num_inference_steps": 5,
+  "guidance_scale": 1.0,
+  "image_reference": [
+    {"image_url": "https://example.com/first-frame.png"}
+  ],
+  "extra_params": {
+    "vsa_mode": "exempt"
+  }
+}
+```
+
+Resolution precedence matches vLLM-Omni:
+
+1. `size`
+2. top-level `width` and `height`
+3. `video_params.width` and `video_params.height`
+
+Top-level `fps` and `num_frames` similarly take precedence over the nested
+block. If `num_frames` is absent, `seconds * fps` is used. FastVideo also keeps
+the legacy `input_reference`, `reference_url`, `video_path`, and `video_url`
+spellings.
+
+A MiniMax-H3 generator keeps the finished draft as a *draft bundle* (its
+normalized latent plus the prompt embeddings it was conditioned on) when the
+request sets `"return_draft_bundle": true`. The bundle is written beside the
+video and served by `GET /v1/videos/{id}/draft_bundle` as
+`application/x-fastvideo-h3-draft`. An Open-H3-Regenerate-2K server takes that
+bundle as `"draft_bundle"` instead of `video_reference`. The
+`pipeline.experimental.draft_bundle_prompt_embeds` policy (`match` by default)
+decides whether the 2K server reuses the bundle's embeddings or re-encodes the
+prompt. `return_draft_bundle` is rejected on `/v1/videos/sync`; submit
+`POST /v1/videos` and download the bundle from the job.
+
+Reference objects carry one string each through `image_url`, `video_url`, and
+`audio_url`. Each field accepts these forms:
+
+| Field | `http(s)` URL | `data:` URL | Local path |
+| --- | --- | --- | --- |
+| `image_reference[].image_url`, `input_reference`, `reference_url` | yes | `data:image/...;base64,` | under `server.media_roots` |
+| `video_reference[].video_url`, `video_path`, `video_url`, `continuation_video` | yes | `data:video/...;base64,` | under `server.media_roots` |
+| `audio_reference[].audio_url` | yes | `data:audio/...;base64,` | under `server.media_roots` |
+| `draft_bundle` (Open-H3-Regenerate-2K) | yes | `data:application/x-fastvideo-h3-draft;base64,` | a `.pt` file under `server.media_roots` |
+
+`input_reference` also accepts a multipart upload. `file_id` references are
+schema-compatible but return HTTP 400 because FastVideo does not provide an
+OpenAI Files store.
+
+URLs must resolve to public addresses unless
+`server.allow_private_media_urls` is set. A `data:` URL must be base64-encoded,
+and its media type must match its field: a `data:audio/...` URL in
+`video_reference` is refused. Each downloaded file, and each decoded video or
+audio file, is limited to `server.media_reference_max_bytes`. URLs and `data:` URLs are
+written under `server.output_dir/uploads` during admission, keep their order
+within each field, and are deleted when the job ends. Invalid, oversized, or
+mismatched media returns HTTP 400 before a job is created.
+
+## Jobs and synchronous responses
+
+An asynchronous submission returns a `video` object in `queued` state. Its
+status advances through `in_progress` to `completed` or `failed`. Completed
+jobs expose `file_name`, the FastVideo compatibility extension `file_path`,
+timings, and peak-memory metadata when the pipeline reports them.
+
+`POST /v1/videos/sync` returns `video/mp4` bytes. It includes
+`X-Request-Id`, `X-Model`, `X-Inference-Time-S`, `X-Stage-Durations`, and
+`X-Peak-Memory-MB` headers. Its temporary MP4 is removed after the response is
+streamed. Asynchronous artifacts remain available until their job is deleted.
+
+Output paths are controlled by the server. Clients cannot choose filesystem
+destinations; every video is written beneath `server.output_dir` with a unique
+request id.
+
+FastVideo's synchronous CUDA execution cannot be interrupted after launch.
+Deleting an in-progress resource removes it from the API immediately; the
+engine remains serialized until the call exits and then removes any artifact.
+
+## Model and LoRA selection
+
+`server.served_model_name` controls the public model id. If omitted, the
+checkpoint path is used. Requests that name another model fail with HTTP 400.
+
+LoRAs are configured under
+`generator.pipeline.components.{lora_path,lora_nickname,lora_strength}`. The
+startup adapter is the only model advertised by a LoRA server, and requests can
+select it by its model nickname or with a selector:
+
+```json
+{
+  "prompt": "A fox runs through fresh snow.",
+  "model": "fasth3-dense-datafree",
+  "lora": {
+    "name": "fasth3-dense-datafree",
+    "path": "/models/adapter_model.safetensors",
+    "scale": 1.0
+  }
+}
+```
+
+The selector must match the adapter already loaded at startup. FastH3 adapter
+files can contain dense replacement tensors and VSA gates in addition to
+low-rank factors, so swapping them inside concurrent requests would corrupt
+shared pipeline state. A mismatch is rejected with HTTP 400.
+
+## Model catalog
+
+`server.model_catalog` points at a JSON document that lets one single-GPU server hold several
+serve configurations and switch between them:
+
+```json
+{
+  "shared_components": ["text_encoder"],
+  "models": {
+    "fasth3-4step": {
+      "tasks": {"t2va": "fasth3_4step.yaml"},
+      "environment": {"FASTVIDEO_H3_SOL_ATTN": "sol_engine_fast"}
+    },
+    "open-h3-regen-2k": {"tasks": {"ref2va": "open_h3_regen_2k.yaml"}}
+  }
+}
+```
+
+Each `tasks` entry names a normal single-GPU serve config whose `served_model_name` is the
+catalog alias. `GET /v1/models` lists the aliases with their tasks and install state,
+`GET /v1/model_info?model=&task=` reports one profile, `GET /v1/model_state` reports what is
+loaded, and `POST /v1/models/load` / `POST /v1/models/unload` change it. A generation request
+for another alias loads it first, serialized behind the generation lock. A catalog server
+mounts the video routes only, so `/v1/images` is unavailable.
+
+## MiniMax-H3 and FastH3
+
+FastH3 and Pika H3 Flex use the same general routes and adapter. `task` is
+optional and accepted for SGLang-compatible H3 clients; `t2v` and `i2v` are
+aliases of `t2va` and `i2va`:
+
+- `t2va` uses text only.
+- `i2va` takes exactly one image reference, the first frame.
+- `l2va` takes exactly one image reference, the last frame.
+- `fl2va` takes one or two image references, the first and last frames.
+- `ref2va` takes ordered image, video, and audio references and requires a
+  server started with the Ref2VA pipeline (`MiniMaxH3Ref2VAModularPipeline` or
+  `PikaH3FlexRef2VAModularPipeline`).
+
+A FastH3 Ref2VA server (Omni) also serves `t2va`: a request with no reference
+media runs the T2VA layout through the same transformer. A Pika H3 Flex server
+loads one adapter, so `t2va`, `i2va`, `l2va` and `fl2va` come from the FL2VA model and
+`ref2va` from a separately served Ref2VA model.
+
+`aspect_ratio` with `short_edge` 480 or 768 (768 when omitted) selects the 480p
+or 768p canvas. Pika H3 Flex snaps a requested size to its nearest released
+bucket at admission and reports that size; its fps, size and frame-grid errors
+return HTTP 400.
+
+The released FastH3 pipeline generates one packed video/audio result per
+request, uses 24 fps, requires guidance scale 1, and accepts frame counts on
+its causal-VAE grid. The serving examples pin its five-point distilled sigma
+schedule (four DiT forwards).
+
+## Defaults and errors
+
+Incoming explicit fields override operator-explicit `default_request` fields,
+which override model preset defaults. Pydantic defaults do not masquerade as
+client intent; the transport uses `model_fields_set`, while typed config parsing
+tracks the exact paths written by the operator.
+
+Errors use the OpenAI envelope:
+
+```json
+{
+  "error": {
+    "message": "...",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": 400
+  }
+}
+```
+
+Parse, model-selection, startup-LoRA, and unsupported-parameter failures are
+HTTP 400; missing resources are HTTP 404. Generation failures are stored on
+asynchronous jobs. Retrieving a failed job returns HTTP 200 with `status: "failed"`
+and a string error code, so OpenAI SDK polling returns the terminal resource
+instead of retrying it as a transport error. Synchronous generation failures
+still return HTTP 500.
+Unknown top-level fields are rejected. `extra_params` accepts only the explicit
+request-batch passthrough fields supported by the typed request adapter.
+
+`GET /health` also verifies that the generation engine is open and all local
+multiprocess workers are alive. It returns HTTP 503 when the worker pool is no
+longer usable.

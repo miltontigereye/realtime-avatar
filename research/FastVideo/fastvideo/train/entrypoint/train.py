@@ -1,0 +1,162 @@
+# SPDX-License-Identifier: Apache-2.0
+"""YAML-only training entrypoint.
+
+Usage::
+
+    torchrun --nproc_per_node=<N> -m fastvideo.train.entrypoint.train \
+        --config path/to/run.yaml
+
+Any unknown ``--dotted.key value`` arguments are applied as
+overrides to the YAML config before parsing.  For example::
+
+    torchrun --nproc_per_node=8 -m fastvideo.train.entrypoint.train \
+        --config path/to/run.yaml \
+        --training.distributed.num_gpus 8 \
+        --training.optimizer.learning_rate 1e-5
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from datetime import timedelta
+from typing import Any
+
+import torch
+
+import fastvideo.envs as envs
+from fastvideo.logger import init_logger
+
+logger = init_logger(__name__)
+
+
+def run_training_from_config(
+    config_path: str,
+    *,
+    dry_run: bool = False,
+    overrides: list[str] | None = None,
+) -> None:
+    """YAML-only training entrypoint (schema v2)."""
+
+    from fastvideo.distributed import (
+        maybe_init_distributed_environment_and_model_parallel, )
+    from fastvideo.train import Trainer
+    from fastvideo.train.utils.checkpoint import (
+        CheckpointConfig,
+        CheckpointManager,
+    )
+    from fastvideo.train.utils.builder import build_from_config
+    from fastvideo.train.utils.config import load_run_config
+    from fastvideo.train.utils.minimax_h3_compile import minimax_h3_student_compile
+
+    # Enable deterministic mode for reproducibility.
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+    cfg = load_run_config(config_path, overrides=overrides)
+    tc = cfg.training
+
+    # Auto-set the VSA attention backend when VSA sparsity is enabled,
+    # unless the user already overrode it explicitly.
+    is_minimax_h3 = any(
+        str(role.get("_target_", "")).startswith("fastvideo.train.models.minimax_h3.") for role in cfg.models.values())
+    # H3 roles select sparse student and dense teacher/critic independently.
+    if tc.vsa_sparsity > 0.0 and not is_minimax_h3:
+        os.environ.setdefault(
+            "FASTVIDEO_ATTENTION_BACKEND",
+            "VIDEO_SPARSE_ATTN",
+        )
+
+    timeout_min = envs.FASTVIDEO_PG_TIMEOUT_MIN.get()
+    maybe_init_distributed_environment_and_model_parallel(
+        tc.distributed.tp_size,
+        tc.distributed.sp_size,
+        timeout=timedelta(minutes=timeout_min) if timeout_min > 0 else None,
+    )
+
+    _, method, dataloader, start_step = build_from_config(cfg)
+
+    if dry_run:
+        logger.info("Dry-run: config parsed and "
+                    "build_from_config succeeded.")
+        return
+
+    trainer = Trainer(
+        tc,
+        config=cfg.resolved_config(),
+        callback_configs=cfg.callbacks,
+    )
+
+    # Attach the exact YAML used for this run to the
+    # tracker (e.g., W&B Files).
+    trainer.tracker.log_file(
+        os.path.abspath(os.path.expanduser(config_path)),
+        name="run.yaml",
+    )
+
+    ckpt_config = CheckpointConfig(
+        save_steps=int(tc.checkpoint.training_state_checkpointing_steps or 0),
+        keep_last=int(tc.checkpoint.checkpoints_total_limit or 0),
+        start_step=int(tc.checkpoint.checkpointing_start_step or 0),
+        save_inference_on_validation=tc.checkpoint.save_inference_checkpoint_on_validation,
+        inference_role=tc.checkpoint.inference_checkpoint_role,
+        inference_dtype=tc.checkpoint.inference_checkpoint_dtype,
+        inference_checkpoints_total_limit=tc.checkpoint.inference_checkpoints_total_limit,
+        require_complete_training_checkpoint=tc.checkpoint.require_complete_training_checkpoint,
+    )
+
+    checkpoint_manager = CheckpointManager(
+        method=method,
+        dataloader=dataloader,
+        output_dir=tc.checkpoint.output_dir,
+        config=ckpt_config,
+        callbacks=trainer.callbacks,
+        raw_config=cfg.raw,
+    )
+
+    with minimax_h3_student_compile(cfg, method):
+        trainer.run(
+            method,
+            dataloader=dataloader,
+            max_steps=tc.loop.max_train_steps,
+            start_step=start_step,
+            checkpoint_manager=checkpoint_manager,
+        )
+
+
+def main(
+    args: Any,
+    overrides: list[str] | None = None,
+) -> None:
+    config_path = str(args.config)
+    dry_run = bool(args.dry_run)
+    logger.info(
+        "Starting training from config=%s",
+        config_path,
+    )
+    run_training_from_config(
+        config_path,
+        dry_run=dry_run,
+        overrides=overrides,
+    )
+    logger.info("Training completed")
+
+
+if __name__ == "__main__":
+    argv = sys.argv
+    parser = argparse.ArgumentParser(description="YAML-only training entrypoint.", )
+    parser.add_argument(
+        "--config",
+        type=str,
+        required=True,
+        help=("Path to training YAML config (schema v2)."),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=("Parse config and build runtime, "
+              "but do not start training."),
+    )
+    args, unknown = parser.parse_known_args(argv[1:])
+    main(args, overrides=unknown if unknown else None)

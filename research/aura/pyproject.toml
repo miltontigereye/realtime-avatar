@@ -1,0 +1,38 @@
+[project]
+name = "aura"
+version = "1.0.0"
+description = "AURA: real-time audio-driven streaming talking-head video generation"
+readme = "README.md"
+authors = [
+    { name = "Nathaniel Cohen", email = "nathaniel.cohen@kyutai.org" },
+    { name = "Amélie Royer", email = "amelie@kyutai.org" },
+]
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.11,<4",  # local microphone and video WebSocket demo
+    "torch>=2.6,<2.9",  # torch 2.9 runs the VAE bf16 conv3d on a slow non-cuDNN kernel
+    "torchvision>=0.21,<0.24",
+    "einops",
+    "safetensors",
+    "huggingface-hub",
+    "transformers>=4.49",
+    "ftfy",
+    "regex",
+    "librosa",
+    "moshi>=0.2.13",
+    "imageio",
+    "imageio-ffmpeg",
+    "pillow",
+    "numpy",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["aura*"]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["aura/wan"]

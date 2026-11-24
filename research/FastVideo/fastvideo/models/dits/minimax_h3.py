@@ -1,0 +1,1760 @@
+# SPDX-License-Identifier: Apache-2.0
+"""FastVideo-native MiniMax H3 joint audio-video diffusion transformer."""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import math
+from collections.abc import Iterator, Mapping
+from typing import Any
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from fastvideo import envs
+from fastvideo.attention import DistributedAttention
+from fastvideo.attention.backends.abstract import AttentionMetadata, layer_idx_from_prefix
+from fastvideo.attention.backends.video_sparse_attn_h3 import MiniMaxH3VSAMetadata
+from fastvideo.attention.layer import DistributedAttention_VSA
+from fastvideo.attention.selector import get_attn_backend
+from fastvideo.attention.utils.nvfp4_qk_precondition import parse_block_indices
+from fastvideo.configs.models.dits.minimax_h3 import MiniMaxH3Config
+from fastvideo.distributed.communication_op import (
+    sequence_model_parallel_all_gather_with_unpad,
+    sequence_model_parallel_shard,
+)
+from fastvideo.distributed.parallel_state import (get_sp_group, get_sp_world_size,
+                                                 model_parallel_is_initialized)
+from fastvideo.forward_context import get_forward_context
+from fastvideo.layers.linear import ReplicatedLinear
+from fastvideo.layers.quantization.mxfp8_config import MXFP8QuantizeMethod
+from fastvideo.layers.quantization.nvfp4_config import NVFP4QuantizeMethod
+from fastvideo.layers.mlp import MLP
+from fastvideo.layers.pdd import PDDReplicatedLinear, fuse_pdd_heads
+from fastvideo.layers.quantization import QuantizationConfig
+from fastvideo.layers.visual_embedding import Timesteps
+from fastvideo.logger import init_logger
+from fastvideo.models.dits.base import BaseDiT
+from fastvideo.models.dits.minimax_h3_vsa_fp4 import (STAGES, vsa_fp4_attention, vsa_fp4_attention_sp,
+                                                       vsa_fp4_requested, vsa_tile_first_attention)
+from fastvideo.models.dits.minimax_h3_sol_attn import (get_sink_tokens as _sol_sink_tokens,
+                                                       mode as _sol_attn_mode,
+                                                       sol_attention as _sol_attention,
+                                                       sparse_step as _sol_sparse_step)
+from fastvideo.models.dits.minimax_h3_token_reduction import (MiniMaxH3TokenReduction, expand_token_pairs,
+                                                              pool_token_pairs)
+from fastvideo.models.dits.minimax_h3_fusions import exact as exact_kernels
+from fastvideo.models.dits.minimax_h3_fusions import mk as mk_kernels
+from fastvideo.models.dits.minimax_h3_fusions import (
+    HAVE_TRITON,
+    fused_qknorm_rope,
+    fused_residual_gate_rmsnorm_modulate,
+    fused_rmsnorm_modulate,
+    minimax_h3_swiglu,
+)
+from fastvideo.platforms import AttentionBackendEnum
+from fastvideo.profiler import nvtx_range
+from fastvideo.utils import get_compute_dtype
+
+logger = init_logger(__name__)
+
+MINIMAX_H3_MODALITY_NUM = 3
+#: eps baked into the MotionKernel H3 kernels; their call sites require it.
+_MK_NORM_EPS = 1e-5
+_CFG = MiniMaxH3Config()
+_MINIMAX_H3_FUSION_NAMES = frozenset({"modulate", "qknorm_rope", "swiglu"})
+_MINIMAX_H3_EXACT_KERNEL_NAMES = frozenset({"rope", "modulate", "swiglu"})
+#: Whole-tier opt-in that replaces the Sol kernels with the MotionKernel ones.
+_MINIMAX_H3_MK_MODE = "mk"
+
+
+def _enabled_minimax_h3_fusions(value: str | None = None) -> frozenset[str]:
+    """Parse the independently switchable inference fusion set."""
+    raw = envs.FASTVIDEO_MINIMAX_H3_FUSIONS.get() if value is None else value
+    normalized = raw.strip().lower()
+    if normalized in {"", "0", "none"}:
+        return frozenset()
+    if normalized in {"1", "all"}:
+        return _MINIMAX_H3_FUSION_NAMES
+    if normalized == _MINIMAX_H3_MK_MODE:
+        # ``mk`` is a whole-tier mode: every fusion is on, and each fused call
+        # site dispatches to the MotionKernel kernel instead of the Sol one.
+        return _MINIMAX_H3_FUSION_NAMES | {_MINIMAX_H3_MK_MODE}
+    enabled = frozenset(item.strip() for item in normalized.split(",") if item.strip())
+    if _MINIMAX_H3_MK_MODE in enabled:
+        raise ValueError(f"'{_MINIMAX_H3_MK_MODE}' is a whole-tier mode and cannot be combined with individual "
+                         f"fusions: {sorted(enabled - {_MINIMAX_H3_MK_MODE})}")
+    unknown = enabled - _MINIMAX_H3_FUSION_NAMES
+    if unknown:
+        supported = ",".join(sorted(_MINIMAX_H3_FUSION_NAMES))
+        raise ValueError(f"Unknown MiniMax H3 fusion(s) {sorted(unknown)}; expected a subset of {supported}.")
+    return enabled
+
+
+def _enabled_minimax_h3_exact_kernels(value: str | None = None) -> frozenset[str]:
+    """Parse the bit-exact kernel set (``FASTVIDEO_MINIMAX_H3_EXACT_KERNELS``)."""
+    raw = envs.FASTVIDEO_MINIMAX_H3_EXACT_KERNELS.get() if value is None else value
+    normalized = raw.strip().lower()
+    if normalized in {"", "0", "none"}:
+        return frozenset()
+    if normalized in {"1", "all"}:
+        return _MINIMAX_H3_EXACT_KERNEL_NAMES
+    enabled = frozenset(item.strip() for item in normalized.split(",") if item.strip())
+    unknown = enabled - _MINIMAX_H3_EXACT_KERNEL_NAMES
+    if unknown:
+        supported = ",".join(sorted(_MINIMAX_H3_EXACT_KERNEL_NAMES))
+        raise ValueError(f"Unknown MiniMax H3 exact kernel(s) {sorted(unknown)}; expected a subset of {supported}.")
+    return enabled
+
+
+def _can_run_minimax_h3_fusion(tensor: torch.Tensor) -> bool:
+    """Triton kernels are inference-only and trace as opaque custom ops.
+
+    The ``HAVE_TRITON`` check makes the eager fallback exact: on a CUDA build
+    whose Triton failed to import, an enabled fusion falls back instead of
+    hitting the strict wrappers' hard RuntimeError mid-forward.
+    """
+    return HAVE_TRITON and tensor.is_cuda and not torch.is_grad_enabled()
+
+
+def _wants_prequantized_linear(linear: nn.Module) -> bool:
+    """Whether one wrapped linear accepts a pre-quantized MXFP8 activation."""
+    base = getattr(linear, "base_layer", linear)
+    method = getattr(base, "quant_method", None)
+    return bool(method is not None and getattr(method, "wants_prequantized_input", lambda: False)())
+
+
+def _attention_wants_prequantized(attention: nn.Module) -> bool:
+    to_q = getattr(attention, "to_q", None)
+    return to_q is not None and _wants_prequantized_linear(to_q)
+
+
+@torch.compile(dynamic=True, fullgraph=True)
+def _gated_residual(hidden_states: torch.Tensor, gate_table: torch.Tensor, indices: torch.Tensor,
+                    branch: torch.Tensor) -> torch.Tensor:
+    """``hidden + gate[indices] * branch`` in one pass (eager materializes the gathered gate)."""
+    return hidden_states + gate_table.index_select(0, indices) * branch
+
+
+class MiniMaxH3RotaryPosEmbed(nn.Module):
+    """Three-axis rotary frequencies over packed `(t, h, w)` coordinates."""
+
+    def __init__(self, rope_freq_dim: int, rope_theta: float) -> None:
+        super().__init__()
+        inv_freq = 1.0 / (rope_theta**(torch.arange(0, 2 * rope_freq_dim, 2, dtype=torch.float32) /
+                                       (2 * rope_freq_dim)))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+    def forward(self, position_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build rotary tensors on the device that owns the packed positions."""
+        position_ids = position_ids.to(torch.float32)
+        # Analytic rotary positional embedding (RoPE) state is non-persistent,
+        # so runtime coordinates own the device after loading or state offload.
+        inv_freq = self.inv_freq.to(position_ids.device)
+        freqs = position_ids.unsqueeze(-1) * inv_freq.view(1, 1, -1)
+        freqs_t, freqs_h, freqs_w = freqs.unbind(dim=1)
+        freqs = torch.cat((freqs_t, freqs_h, freqs_w), dim=-1)
+        freqs = torch.cat((freqs, freqs), dim=-1)
+        return freqs.cos(), freqs.sin()
+
+
+class MiniMaxH3FeedForward(nn.Module):
+    """Bias-free H3 SwiGLU with value-first packed halves."""
+
+    def __init__(
+        self,
+        hidden_size: int,
+        ffn_dim: int,
+        quant_config: QuantizationConfig | None = None,
+        prefix: str = "",
+        fuse_swiglu: bool = False,
+        exact_swiglu: bool = False,
+        mk_swiglu: bool = False,
+    ) -> None:
+        super().__init__()
+        self.fc_in = ReplicatedLinear(
+            hidden_size,
+            2 * ffn_dim,
+            bias=False,
+            quant_config=quant_config,
+            prefix=f"{prefix}.fc_in",
+        )
+        self.fc_out = ReplicatedLinear(
+            ffn_dim,
+            hidden_size,
+            bias=False,
+            quant_config=quant_config,
+            prefix=f"{prefix}.fc_out",
+        )
+        self.fuse_swiglu = fuse_swiglu
+        self.exact_swiglu = exact_swiglu
+        self.mk_swiglu = mk_swiglu
+        self.use_mxfp8 = isinstance(self.fc_in.quant_method, MXFP8QuantizeMethod) and isinstance(
+            self.fc_out.quant_method, MXFP8QuantizeMethod)
+        # Inference-only token chunking: the 2 * ffn_dim intermediate is ~5.3x the block input
+        # (4.5 GiB at 78k tokens), so chunks bound the activation peak on 24-32 GB GPUs.
+        self.chunk_tokens = envs.FASTVIDEO_H3_FFN_CHUNK_TOKENS.get()
+
+    def _should_chunk(self, hidden_states: torch.Tensor) -> bool:
+        tokens = hidden_states.shape[-2] if hidden_states.dim() > 1 else 0
+        return bool(self.chunk_tokens and tokens > self.chunk_tokens and not torch.is_grad_enabled()
+                    and not torch.compiler.is_compiling()
+                    and hidden_states.numel() == tokens * hidden_states.shape[-1])
+
+    def forward(self, hidden_states: torch.Tensor,
+                pre_quantized: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None) -> torch.Tensor:
+        if pre_quantized is not None:
+            return self._forward(hidden_states, pre_quantized)
+        if self._should_chunk(hidden_states):
+            tokens = hidden_states.shape[-2]
+            out = torch.empty_like(hidden_states)
+            for start in range(0, tokens, self.chunk_tokens):
+                rows = slice(start, start + self.chunk_tokens)
+                out[..., rows, :] = self._forward(hidden_states[..., rows, :].contiguous())
+            return out
+        return self._forward(hidden_states)
+
+    def _forward(self, hidden_states: torch.Tensor,
+                 pre_quantized: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None) -> torch.Tensor:
+        if self.use_mxfp8:
+            from fastvideo.layers.mxfp8linear import mxfp8_swiglu_feed_forward
+
+            return mxfp8_swiglu_feed_forward(hidden_states, self.fc_in, self.fc_out)
+        if self.fuse_swiglu and pre_quantized is not None and not torch.compiler.is_compiling():
+            from fastvideo.models.dits.minimax_h3_fusions.swiglu_gemm import try_swiglu_gemm
+
+            fused = try_swiglu_gemm(self, hidden_states, pre_quantized)
+            if fused is not None:
+                return fused
+        if pre_quantized is None:
+            hidden_states, _ = self.fc_in(hidden_states)
+        else:
+            hidden_states = self.fc_in.quant_method.apply(
+                self.fc_in, hidden_states, self.fc_in.bias, pre_quantized=pre_quantized,
+            )
+        if (self.fuse_swiglu and _can_run_minimax_h3_fusion(hidden_states)
+                and not torch.compiler.is_compiling()):
+            quantized = self._quantized_swiglu_output(hidden_states)
+            if quantized is not None:
+                return quantized
+        if self.fuse_swiglu and _can_run_minimax_h3_fusion(hidden_states):
+            if self.mk_swiglu and mk_kernels.HAVE_TRITON and not torch.compiler.is_compiling():
+                hidden_states = mk_kernels.swiglu(hidden_states)
+            else:
+                hidden_states = minimax_h3_swiglu(hidden_states)
+        elif self.exact_swiglu and exact_kernels.supports_rowwise(hidden_states):
+            hidden_states = exact_kernels.swiglu(hidden_states)
+        else:
+            hidden_states, gate = hidden_states.chunk(2, dim=-1)
+            hidden_states = hidden_states * F.silu(gate)
+        hidden_states, _ = self.fc_out(hidden_states)
+        return hidden_states
+
+    def input_quantization_scale(self, hidden_states: torch.Tensor) -> torch.Tensor | None:
+        """Static scale for a fused producer, or None when ordinary preparation is needed."""
+        method = getattr(self.fc_in, "quant_method", None)
+        if (self.chunk_tokens or type(method) is not NVFP4QuantizeMethod
+                or not method.wants_prequantized_input() or hidden_states.dtype != torch.bfloat16
+                or hidden_states.shape[-1] % 64 or torch.cuda.get_device_capability(hidden_states.device)[0] < 10):
+            return None
+        scale = method._static_activation_global_sf()
+        if scale is None:
+            scale = getattr(self.fc_in, "_nvfp4_input_global_sf", None)
+        if scale is None and not method._dynamic_activation_scale():
+            scale = method.x_global_sf
+        return scale
+
+    def _quantized_swiglu_output(self, packed: torch.Tensor) -> torch.Tensor | None:
+        """Fuse BF16 SwiGLU with compatible static/unit-scale NVFP4 preparation."""
+        layer = self.fc_out
+        method = getattr(layer, "quant_method", None)
+        if (type(method) is not NVFP4QuantizeMethod or not method.wants_prequantized_input()
+                or packed.dtype != torch.bfloat16 or packed.shape[-1] % 128 or not packed.is_contiguous()
+                or torch.cuda.get_device_capability(packed.device)[0] < 10):
+            return None
+        scale = method._static_activation_global_sf()
+        if scale is None:
+            scale = getattr(layer, "_nvfp4_input_global_sf", None)
+        if scale is None:
+            if method._dynamic_activation_scale():
+                return None
+            scale = method.x_global_sf
+        from fastvideo.models.dits.minimax_h3_fusions.swiglu_quant import swiglu_quantize_nvfp4
+
+        pre = swiglu_quantize_nvfp4(packed, scale)
+        # apply(pre_quantized=...) reads only this view's shape. The BF16
+        # SwiGLU activation itself is never allocated or written.
+        shape_view = packed[..., :packed.shape[-1] // 2]
+        return method.apply(layer, shape_view, layer.bias, pre_quantized=pre)
+
+
+class MiniMaxH3Attention(nn.Module):
+    """Full self-attention over one sequence-parallel packed document."""
+
+    def __init__(
+        self,
+        hidden_size: int,
+        num_attention_heads: int,
+        attention_head_dim: int,
+        qk_norm_eps: float,
+        supported_attention_backends: tuple[AttentionBackendEnum, ...],
+        quant_config: QuantizationConfig | None,
+        prefix: str,
+        fuse_qknorm_rope: bool = False,
+        fa4_packed_varlen: bool = False,
+        cudnn_sdpa: bool = False,
+        exact_rope: bool = False,
+        mk_qkv: bool = False,
+        vsa_fp4: dict[str, Any] | None = None,
+        bf16_attention: bool = False,
+    ) -> None:
+        super().__init__()
+        self.num_attention_heads = num_attention_heads
+        self.attention_head_dim = attention_head_dim
+        inner_dim = num_attention_heads * attention_head_dim
+        self.to_q = ReplicatedLinear(
+            hidden_size,
+            inner_dim,
+            bias=False,
+            quant_config=quant_config,
+            prefix=f"{prefix}.to_q",
+        )
+        self.to_k = ReplicatedLinear(
+            hidden_size,
+            inner_dim,
+            bias=False,
+            quant_config=quant_config,
+            prefix=f"{prefix}.to_k",
+        )
+        self.to_v = ReplicatedLinear(
+            hidden_size,
+            inner_dim,
+            bias=False,
+            quant_config=quant_config,
+            prefix=f"{prefix}.to_v",
+        )
+        self.norm_q = nn.RMSNorm(attention_head_dim, eps=qk_norm_eps)
+        self.norm_k = nn.RMSNorm(attention_head_dim, eps=qk_norm_eps)
+        self.to_out = ReplicatedLinear(
+            inner_dim,
+            hidden_size,
+            bias=False,
+            quant_config=quant_config,
+            prefix=f"{prefix}.to_out",
+        )
+        self.fuse_qknorm_rope = fuse_qknorm_rope
+        self.exact_rope = exact_rope
+        self.mk_qkv = mk_qkv
+        # VSA carries a learned gate on its pooled-compression branch. The H3
+        # checkpoint has no such weight, so the loader zero-initializes it
+        # (ALLOWED_NEW_PARAM_PATTERNS) and the branch is exactly disabled
+        # until finetuned. Built only when VSA-H3 actually resolves, keeping
+        # the FLASH/SDPA paths and their state_dict untouched.
+        resolved_backend = get_attn_backend(attention_head_dim,
+                                            get_compute_dtype(),
+                                            supported_attention_backends=supported_attention_backends)
+        use_vsa = resolved_backend.get_name() == "VIDEO_SPARSE_ATTN_H3"
+        attention_cls = DistributedAttention_VSA if use_vsa else DistributedAttention
+        # Blocks listed in FASTVIDEO_NVFP4_FA4_BF16_BLOCKS opt out of the process-wide NVFP4 FA4 Q/K quantization.
+        precision_args: dict[str, Any] = {"nvfp4_fa4": False} if bf16_attention else {}
+        self.distributed_attention = attention_cls(
+            num_heads=num_attention_heads,
+            head_size=attention_head_dim,
+            causal=False,
+            supported_attention_backends=supported_attention_backends,
+            prefix=prefix,
+            fa4_packed_varlen=fa4_packed_varlen,
+            cudnn_sdpa=cudnn_sdpa,
+            **precision_args,
+        )
+        # Opt-in inference route: VSA-H3 selection on the block-sparse FP4
+        # kernel (see minimax_h3_vsa_fp4); grad and compile keep the generic path.
+        self._layer_idx = layer_idx_from_prefix(prefix, default=-1)
+        self._vsa_fp4_options = dict(vsa_fp4 or {})
+        requested = self._vsa_fp4_options.get("enabled")
+        if requested and not use_vsa:
+            raise ValueError("h3_vsa_fp4 requires the VIDEO_SPARSE_ATTN_H3 attention backend")
+        self._vsa_fp4 = use_vsa and (vsa_fp4_requested() if requested is None else requested)
+        self._vsa_tile_first = use_vsa and envs.FASTVIDEO_H3_VSA_TILE_FIRST.get()
+        self.to_gate_compress: ReplicatedLinear | None = None
+        # None = unchecked; the first forward tests the loaded weight once and
+        # skips the gate branch entirely while it is structurally zero.
+        self._gate_compress_active: bool | None = None
+        self._gate_compress_training = False
+        if use_vsa:
+            self.to_gate_compress = ReplicatedLinear(
+                hidden_size,
+                inner_dim,
+                bias=False,
+                quant_config=quant_config,
+                prefix=f"{prefix}.to_gate_compress",
+            )
+
+    def _gate_active(self) -> bool:
+        """True when the compression gate can contribute.
+
+        The zero-initialized (not-yet-finetuned) gate makes the whole branch
+        a guaranteed zero — a full GEMM plus a third more all-to-all/tile
+        traffic per layer for nothing — so test the loaded weight once and
+        cache the answer. Trainable model roles keep this branch active even
+        during no-grad rollouts: their weights can change after an update.
+        Under grad it always runs so gradients can reach an initially zero gate.
+        """
+        if torch.is_grad_enabled() or getattr(self, "_gate_compress_training", False):
+            return True
+        if self._gate_compress_active is None:
+            if torch.compiler.is_compiling():
+                raise RuntimeError(
+                    "MiniMax H3 VSA compression gate was not resolved before torch.compile; "
+                    "call prepare_for_compile() after loading weights.")
+            self._resolve_gate_compress_for_compile()
+        assert self._gate_compress_active is not None
+        return self._gate_compress_active
+
+    def _resolve_gate_compress_for_compile(self) -> None:
+        """Resolve the inference-only compression-gate branch eagerly.
+
+        Regional compilation wraps each transformer block with
+        ``fullgraph=True``. Resolving the loaded weight before capture keeps
+        the GPU-to-host bool conversion and the cache mutation out of every
+        compiled block graph. Grad-enabled forwards ignore this cached value
+        in ``_gate_active`` so training can still learn from a zero gate.
+        """
+        if self.to_gate_compress is None:
+            return
+        if self._gate_compress_active is None:
+            weight = self.to_gate_compress.weight
+            if weight is None:
+                # Packed NVFP4 gate: any nonzero E2M1 magnitude (bits 0x7 of
+                # either nibble) makes the branch live.
+                packed = self.to_gate_compress._nvfp4_weight
+                self._gate_compress_active = bool((packed & 0x77).any())
+                return
+            # bool() on a DTensor reduction resolves collectively, so every
+            # rank caches the same answer.
+            self._gate_compress_active = bool((weight != 0).any())
+
+    @staticmethod
+    def _apply_rotary_emb(
+        hidden_states: torch.Tensor,
+        rotary_emb: tuple[torch.Tensor, torch.Tensor],
+    ) -> torch.Tensor:
+        """Rotate the RoPE prefix while preserving the rest of each attention head."""
+        cos, sin = rotary_emb
+        rotary_dim = cos.shape[-1]
+        hidden_states_rotary = hidden_states[..., :rotary_dim]
+        hidden_states_pass = hidden_states[..., rotary_dim:]
+        cos = cos.to(hidden_states.dtype)[None, :, None, :]
+        sin = sin.to(hidden_states.dtype)[None, :, None, :]
+        first_half, second_half = hidden_states_rotary.chunk(2, dim=-1)
+        hidden_states_rotated = torch.cat((-second_half, first_half), dim=-1)
+        hidden_states_rotary = hidden_states_rotary * cos + hidden_states_rotated * sin
+        return torch.cat((hidden_states_rotary, hidden_states_pass), dim=-1).contiguous()
+
+    def _rotate(self, hidden_states: torch.Tensor, rotary_emb: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
+        if self.exact_rope and exact_kernels.supports_rope(hidden_states, rotary_emb):
+            return exact_kernels.rope_prefix(hidden_states, rotary_emb)
+        return self._apply_rotary_emb(hidden_states, rotary_emb)
+
+    def input_quantization_scale(
+        self, hidden_states: torch.Tensor, rotary_emb: tuple[torch.Tensor, torch.Tensor] | None,
+    ) -> torch.Tensor | None:
+        """Allow producer quantization only when this call will use the shared FP4 route."""
+        fine_override = getattr(getattr(self.distributed_attention, "attn_impl", None), "fine_attention_override", None)
+        if (not self._vsa_fp4 or fine_override is not None or rotary_emb is None
+                or torch.is_grad_enabled() or torch.compiler.is_compiling()
+                or not hidden_states.is_cuda or hidden_states.dtype != torch.bfloat16
+                or torch.cuda.get_device_capability(hidden_states.device)[0] < 10):
+            return None
+        meta = get_forward_context().attn_metadata
+        if not isinstance(meta, MiniMaxH3VSAMetadata) or not meta.exempt or meta.pad_tokens:
+            return None
+        from fastvideo.models.dits.minimax_h3_vsa_fp4 import _shared_qkv_gate_scale
+
+        return _shared_qkv_gate_scale(self, hidden_states)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        rotary_emb: tuple[torch.Tensor, torch.Tensor] | None,
+        original_seq_len: int,
+        attn_metadata: AttentionMetadata | None = None,
+        pre_quantized: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
+    ) -> torch.Tensor:
+        fine_override = getattr(getattr(self.distributed_attention, "attn_impl", None), "fine_attention_override", None)
+        # Sol-Attn (opt-in) replaces the whole-sequence attention of a refine step; it needs the full sequence on
+        # this rank, so sequence-parallel runs keep the dense path.
+        sol_step = None
+        if (_sol_attn_mode() is not None and rotary_emb is not None and not torch.is_grad_enabled()
+                and not torch.compiler.is_compiling()
+                and (not model_parallel_is_initialized() or get_sp_world_size() == 1)):
+            sol_step = get_forward_context().current_timestep
+        sol_sparse = (sol_step is not None and _sol_sink_tokens() < (original_seq_len or 0)
+                      and _sol_sparse_step(int(sol_step)))
+        if (self._vsa_fp4 and fine_override is None and rotary_emb is not None and not torch.is_grad_enabled()
+                and not torch.compiler.is_compiling()):
+            meta = get_forward_context().attn_metadata
+            # Exempt mode lists the first prefix tile for every query, which the
+            # FP4 kernel relies on to start each row from a finite running max.
+            if isinstance(meta, MiniMaxH3VSAMetadata) and meta.exempt and not meta.pad_tokens:
+                use_fused_rope = self.fuse_qknorm_rope and _can_run_minimax_h3_fusion(hidden_states)
+                if not model_parallel_is_initialized() or get_sp_world_size() == 1:
+                    hidden_states = vsa_fp4_attention(self, hidden_states, rotary_emb, meta, use_fused_rope,
+                                                       pre_quantized=pre_quantized)
+                else:
+                    hidden_states = vsa_fp4_attention_sp(self, hidden_states, rotary_emb, meta, use_fused_rope,
+                                                         get_sp_group(), pre_quantized=pre_quantized)
+                with STAGES.span("out_proj"):
+                    if isinstance(hidden_states, tuple):
+                        shape_view, prepared = hidden_states
+                        hidden_states = self.to_out.quant_method.apply(
+                            self.to_out, shape_view, self.to_out.bias, pre_quantized=prepared,
+                        )
+                    else:
+                        hidden_states, _ = self.to_out(hidden_states)
+                return hidden_states
+        if pre_quantized is not None:
+            raise RuntimeError("Prequantized H3 attention input requires the eager FP4 VSA route")
+        if (self._vsa_tile_first and hidden_states.is_cuda and rotary_emb is not None
+                and not torch.is_grad_enabled() and not torch.compiler.is_compiling()
+                and (not model_parallel_is_initialized() or get_sp_world_size() == 1)):
+            meta = get_forward_context().attn_metadata
+            if isinstance(meta, MiniMaxH3VSAMetadata) and meta.tile_elems == 64 and not meta.pad_tokens:
+                use_fused_rope = self.fuse_qknorm_rope and _can_run_minimax_h3_fusion(hidden_states)
+                hidden_states = vsa_tile_first_attention(self, hidden_states, rotary_emb, meta, use_fused_rope)
+                with STAGES.span("out_proj"):
+                    hidden_states, _ = self.to_out(hidden_states)
+                return hidden_states
+        gate_linear = (self.to_gate_compress if self.to_gate_compress is not None and self._gate_active() else None)
+        with STAGES.span("qkv_proj"):
+            # q/k/v and the VSA gate see the same activations; share compatible input quantization.
+            from fastvideo.models.dits.minimax_h3_vsa_fp4 import _shared_input_projections
+            projections = (self.to_q, self.to_k, self.to_v) + ((gate_linear, ) if gate_linear is not None else ())
+            if not torch.is_grad_enabled() and not torch.compiler.is_compiling():
+                projected = _shared_input_projections(projections, hidden_states)
+            else:
+                projected = [projection(hidden_states)[0] for projection in projections]
+            query, key, value, *gate_out = projected
+            gate_compress = gate_out[0] if gate_out else None
+            del projected, gate_out
+        query = query.unflatten(-1, (self.num_attention_heads, self.attention_head_dim))
+        key = key.unflatten(-1, (self.num_attention_heads, self.attention_head_dim))
+        value = value.unflatten(-1, (self.num_attention_heads, self.attention_head_dim))
+        if (self.fuse_qknorm_rope and rotary_emb is not None and _can_run_minimax_h3_fusion(query)):
+            cos, sin = rotary_emb
+            cos = cos.to(query.dtype)
+            sin = sin.to(query.dtype)
+            if (self.mk_qkv and mk_kernels.HAVE_TRITON and not torch.compiler.is_compiling()
+                    and self.norm_q.eps == _MK_NORM_EPS
+                    and self.norm_k.eps == _MK_NORM_EPS and type(self.distributed_attention) is DistributedAttention
+                    and not sol_sparse
+                    and not (self.to_gate_compress is not None and self._gate_active())):
+                # One launch replaces the two Sol QK-norm/RoPE kernels and the
+                # ``torch.cat`` stack: the prologue writes a contiguous
+                # ``[3*B, S, H, D]`` buffer that ``forward_stacked`` feeds to the
+                # backend directly, so q/k/v are never copied again.
+                qkv = mk_kernels.qkv_prologue(query, key, value, self.norm_q.weight, self.norm_k.weight, cos, sin)
+                with STAGES.span("attention"):
+                    hidden_states, _ = self.distributed_attention.forward_stacked(
+                        qkv, original_seq_len=original_seq_len, attn_metadata=attn_metadata)
+                hidden_states = hidden_states.flatten(2, 3).type_as(qkv)
+                with STAGES.span("out_proj"):
+                    hidden_states, _ = self.to_out(hidden_states)
+                return hidden_states
+            query = fused_qknorm_rope(query, self.norm_q.weight, cos, sin, self.norm_q.eps)
+            key = fused_qknorm_rope(key, self.norm_k.weight, cos, sin, self.norm_k.eps)
+        else:
+            query = self.norm_q(query)
+            key = self.norm_k(key)
+            if rotary_emb is not None:
+                query = self._rotate(query, rotary_emb)
+                key = self._rotate(key, rotary_emb)
+
+        if sol_sparse:
+            with STAGES.span("attention"):
+                hidden_states = _sol_attention(query, key, value, int(sol_step))
+            hidden_states = hidden_states.flatten(2, 3).type_as(query)
+            with STAGES.span("out_proj"):
+                hidden_states, _ = self.to_out(hidden_states)
+            return hidden_states
+
+        # H3 rotates only 96/128 channels, which the generic `freqs_cis`
+        # branch cannot express. Apply it above, then pass no RoPE here.
+        extra_attention_kwargs = {}
+        if gate_compress is not None:
+            extra_attention_kwargs["gate_compress"] = gate_compress.unflatten(
+                -1, (self.num_attention_heads, self.attention_head_dim))
+        with STAGES.span("attention"):
+            hidden_states, _ = self.distributed_attention(
+                query,
+                key,
+                value,
+                original_seq_len=original_seq_len,
+                freqs_cis=None,
+                attn_metadata=attn_metadata,
+                **extra_attention_kwargs,
+            )
+        hidden_states = hidden_states.flatten(2, 3).type_as(query)
+        with STAGES.span("out_proj"):
+            hidden_states, _ = self.to_out(hidden_states)
+        return hidden_states
+
+
+class MiniMaxH3TokenRefinerBlock(nn.Module):
+    """Plain pre-norm Transformer block for the projected text stream."""
+
+    def __init__(
+        self,
+        hidden_size: int,
+        num_attention_heads: int,
+        attention_head_dim: int,
+        ffn_dim: int,
+        norm_eps: float,
+        qk_norm_eps: float,
+        supported_attention_backends: tuple[AttentionBackendEnum, ...],
+        quant_config: QuantizationConfig | None,
+        prefix: str,
+    ) -> None:
+        super().__init__()
+        self.norm1 = nn.RMSNorm(hidden_size, eps=norm_eps)
+        self.attn = MiniMaxH3Attention(
+            hidden_size,
+            num_attention_heads,
+            attention_head_dim,
+            qk_norm_eps,
+            supported_attention_backends,
+            quant_config,
+            prefix=f"{prefix}.attn",
+        )
+        self.norm2 = nn.RMSNorm(hidden_size, eps=norm_eps)
+        self.ff = MiniMaxH3FeedForward(
+            hidden_size,
+            ffn_dim,
+            quant_config=quant_config,
+            prefix=f"{prefix}.ff",
+        )
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        original_seq_len: int,
+        attn_metadata: AttentionMetadata | None = None,
+    ) -> torch.Tensor:
+        hidden_states = hidden_states + self.attn(
+            self.norm1(hidden_states),
+            None,
+            original_seq_len,
+            attn_metadata=attn_metadata,
+        )
+        return hidden_states + self.ff(self.norm2(hidden_states))
+
+
+class MiniMaxH3TokenRefiner(nn.Module):
+    """Two-block text refiner used before packing the modalities."""
+
+    def __init__(
+        self,
+        hidden_size: int,
+        num_attention_heads: int,
+        attention_head_dim: int,
+        ffn_dim: int,
+        num_layers: int,
+        norm_eps: float,
+        qk_norm_eps: float,
+        final_norm_eps: float,
+        supported_attention_backends: tuple[AttentionBackendEnum, ...],
+        quant_config: QuantizationConfig | None,
+        prefix: str,
+    ) -> None:
+        super().__init__()
+        self.refiner_blocks = nn.ModuleList([
+            MiniMaxH3TokenRefinerBlock(
+                hidden_size,
+                num_attention_heads,
+                attention_head_dim,
+                ffn_dim,
+                norm_eps,
+                qk_norm_eps,
+                supported_attention_backends,
+                quant_config,
+                prefix=f"{prefix}.refiner_blocks.{index}",
+            ) for index in range(num_layers)
+        ])
+        self.final_norm = nn.RMSNorm(hidden_size, eps=final_norm_eps)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        original_seq_len: int,
+        attn_metadata: AttentionMetadata | None = None,
+    ) -> torch.Tensor:
+        for block in self.refiner_blocks:
+            hidden_states = block(hidden_states, original_seq_len, attn_metadata=attn_metadata)
+        return self.final_norm(hidden_states)
+
+
+class MiniMaxH3AdaLayerNormModulation(nn.Module):
+    """Produce six modulation tables for every `(timestep, modality)` pair."""
+
+    def __init__(
+        self,
+        time_embed_dim: int,
+        hidden_size: int,
+        quant_config: QuantizationConfig | None = None,
+        prefix: str = "",
+        apply_silu: bool = True,
+    ) -> None:
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.apply_silu = apply_silu
+        self.linear = ReplicatedLinear(
+            time_embed_dim,
+            6 * hidden_size * MINIMAX_H3_MODALITY_NUM,
+            bias=True,
+            quant_config=quant_config,
+            prefix=f"{prefix}.linear",
+        )
+
+    def enable_host_cache(self, table: dict | None = None, *, keep_resident: bool = False) -> None:
+        """Keep the projection in pinned host memory and cache its output per timestep set.
+
+        The modulation is a pure function of the timestep embedding, and few-step checkpoints sample a fixed
+        timestep ladder, so each block's output is a small constant table. The weights (the largest bf16 tensors
+        in the DiT) then never occupy device memory: a cache miss copies them in for one matmul.
+        """
+        weight, bias = self.linear.weight, self.linear.bias
+        if table is not None and (weight is None or bias is None):
+            # Table-only load skipped these tensors entirely.
+            self._host_weight = self._host_bias = None
+            self._modulation_cache = dict(table)
+            self._cache_key = None
+            return
+        weight, bias = weight.data, bias.data
+        if table is None and keep_resident:
+            # Unified-memory GPUs share the host pool. Reuse the original allocation
+            # instead of making a pinned copy and copying it back on every cache miss.
+            self._host_weight, self._host_bias = weight, bias
+        elif table is None:
+            self._host_weight = weight.to("cpu").pin_memory()
+            self._host_bias = bias.to("cpu").pin_memory()
+        else:
+            # Precomputed modulation for a fixed timestep ladder: the projection weights are not needed at all.
+            self._host_weight = self._host_bias = None
+        self.linear.weight.data = torch.empty(0, dtype=weight.dtype)
+        self.linear.bias.data = torch.empty(0, dtype=bias.dtype)
+        self._modulation_cache: dict[Any, torch.Tensor] = dict(table or {})
+        self._cache_key: Any = None
+
+    def forward(self, temb: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        cache = getattr(self, "_modulation_cache", None)
+        if cache is not None:
+            out = cache.get(self._cache_key)
+            if out is None:
+                if self._host_weight is None:
+                    raise RuntimeError(f"No precomputed AdaLN modulation for timestep key {self._cache_key}; the "
+                                       "table only covers the checkpoint's fixed ladder. Load without "
+                                       "FASTVIDEO_H3_ADALN_TABLE to use other timesteps.")
+                x = F.silu(temb) if self.apply_silu else temb
+                weight = self._host_weight.to(temb.device, non_blocking=True)
+                bias = self._host_bias.to(temb.device, non_blocking=True)
+                out = F.linear(x.to(weight.dtype), weight, bias)
+                if self._cache_key is not None:
+                    cache[self._cache_key] = out
+                    if envs.FASTVIDEO_H3_ADALN_DUMP.get():
+                        # Projection inputs, kept only when dumping, for offline low-rank fits.
+                        self.__dict__.setdefault("_modulation_inputs", {})[self._cache_key] = x.detach()
+            return out.view(-1, 6 * self.hidden_size).chunk(6, dim=-1)
+        if self.apply_silu:
+            temb = F.silu(temb)
+        temb, _ = self.linear(temb.to(self.linear.weight.dtype))
+        return temb.view(-1, 6 * self.hidden_size).chunk(6, dim=-1)
+
+
+class MiniMaxH3AdaLayerNormOut(nn.Module):
+    """Final RMSNorm with per-timestep row modulation."""
+
+    def __init__(
+        self,
+        hidden_size: int,
+        time_embed_dim: int,
+        eps: float,
+        quant_config: QuantizationConfig | None = None,
+        prefix: str = "",
+        apply_silu: bool = True,
+    ) -> None:
+        super().__init__()
+        self.norm = nn.RMSNorm(hidden_size, eps=eps)
+        self.apply_silu = apply_silu
+        self.linear = ReplicatedLinear(
+            time_embed_dim,
+            2 * hidden_size,
+            bias=True,
+            quant_config=quant_config,
+            prefix=f"{prefix}.linear",
+        )
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        temb: torch.Tensor,
+        timestep_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.apply_silu:
+            temb = F.silu(temb)
+        shift_scale, _ = self.linear(temb.to(self.linear.weight.dtype))
+        shift, scale = shift_scale.chunk(2, dim=-1)
+        hidden_states = self.norm(hidden_states)
+        return hidden_states * (1.0 + scale.index_select(0, timestep_indices)) + shift.index_select(0, timestep_indices)
+
+
+class MiniMaxH3TransformerBlock(nn.Module):
+    """Packed self-attention and feed-forward branches with row-indexed AdaLN."""
+
+    def __init__(
+        self,
+        hidden_size: int,
+        num_attention_heads: int,
+        attention_head_dim: int,
+        ffn_dim: int,
+        time_embed_dim: int,
+        norm_eps: float,
+        qk_norm_eps: float,
+        supported_attention_backends: tuple[AttentionBackendEnum, ...],
+        quant_config: QuantizationConfig | None,
+        prefix: str,
+        adaln_apply_silu: bool = True,
+        fuse_modulate: bool = False,
+        fuse_qknorm_rope: bool = False,
+        fuse_swiglu: bool = False,
+        fa4_packed_varlen: bool = False,
+        cudnn_sdpa: bool = False,
+        exact_kernels: frozenset[str] = frozenset(),
+        vsa_fp4: dict[str, Any] | None = None,
+        mk_tier: bool = False,
+        bf16_attention: bool = False,
+    ) -> None:
+        super().__init__()
+        self.norm1 = nn.RMSNorm(hidden_size, eps=norm_eps)
+        self.attn = MiniMaxH3Attention(
+            hidden_size,
+            num_attention_heads,
+            attention_head_dim,
+            qk_norm_eps,
+            supported_attention_backends,
+            quant_config,
+            prefix=f"{prefix}.attn",
+            fuse_qknorm_rope=fuse_qknorm_rope,
+            fa4_packed_varlen=fa4_packed_varlen,
+            cudnn_sdpa=cudnn_sdpa,
+            exact_rope="rope" in exact_kernels,
+            vsa_fp4=vsa_fp4,
+            mk_qkv=mk_tier,
+            bf16_attention=bf16_attention,
+        )
+        self.norm2 = nn.RMSNorm(hidden_size, eps=norm_eps)
+        self.ff = MiniMaxH3FeedForward(
+            hidden_size,
+            ffn_dim,
+            quant_config=quant_config,
+            prefix=f"{prefix}.ff",
+            fuse_swiglu=fuse_swiglu,
+            exact_swiglu="swiglu" in exact_kernels,
+            mk_swiglu=mk_tier,
+        )
+        self.adaln_proj = MiniMaxH3AdaLayerNormModulation(
+            time_embed_dim,
+            hidden_size,
+            quant_config=quant_config,
+            prefix=f"{prefix}.adaln_proj",
+            apply_silu=adaln_apply_silu,
+        )
+        self.fuse_modulate = fuse_modulate
+        self.exact_modulate = "modulate" in exact_kernels
+        self.mk_tier = mk_tier
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        temb: torch.Tensor,
+        adaln_indices: torch.Tensor,
+        rotary_emb: tuple[torch.Tensor, torch.Tensor],
+        original_seq_len: int,
+        *,
+        _attention_prepared: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
+        _next_block: MiniMaxH3TransformerBlock | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        with nvtx_range("minimax_h3.transformer_block.adaln_projection"):
+            shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
+                t.to(hidden_states.dtype) for t in self.adaln_proj(temb))
+
+        use_modulate_fusion = self.fuse_modulate and _can_run_minimax_h3_fusion(hidden_states)
+        # The bit-exact kernels replace only the eager expressions below.
+        use_exact_modulate = (not use_modulate_fusion and self.exact_modulate and adaln_indices.is_contiguous()
+                              and exact_kernels.supports_rowwise(hidden_states, shift_msa, scale_msa, gate_msa,
+                                                                 shift_mlp, scale_mlp, gate_mlp))
+        attn_quantized = _attention_prepared
+        attn_scale = (self.attn.input_quantization_scale(hidden_states, rotary_emb)
+                      if attn_quantized is None and use_modulate_fusion and not torch.compiler.is_compiling() else None)
+        if attn_quantized is not None:
+            norm_hidden_states = hidden_states
+        elif attn_scale is not None:
+            from fastvideo.models.dits.minimax_h3_fusions.modulation_quant import modulate_quantize_nvfp4
+
+            with nvtx_range("minimax_h3.transformer_block.modulate_quant_fusion"):
+                attn_quantized = modulate_quantize_nvfp4(
+                    hidden_states, self.norm1.weight, scale_msa, shift_msa, adaln_indices,
+                    self.norm1.eps, attn_scale,
+                )
+            norm_hidden_states = hidden_states  # Shape only; QKV and the gate consume attn_quantized.
+        elif use_modulate_fusion:
+            if (self.mk_tier and mk_kernels.HAVE_TRITON and not torch.compiler.is_compiling()
+                    and self.norm1.eps == _MK_NORM_EPS):
+                if _attention_wants_prequantized(self.attn):
+                    norm_hidden_states, _pq_values, _pq_scales = mk_kernels.rmsnorm_modulate(
+                        hidden_states, self.norm1.weight, scale_msa, shift_msa, adaln_indices,
+                        prequantize=True)
+                    norm_hidden_states._mxfp8_prequantized = (_pq_values, _pq_scales, None)
+                else:
+                    norm_hidden_states = mk_kernels.rmsnorm_modulate(hidden_states, self.norm1.weight, scale_msa,
+                                                                     shift_msa, adaln_indices)
+            else:
+                with nvtx_range("minimax_h3.transformer_block.modulate_fusion"):
+                    norm_hidden_states = fused_rmsnorm_modulate(
+                        hidden_states,
+                        self.norm1.weight,
+                        scale_msa,
+                        shift_msa,
+                        adaln_indices,
+                        self.norm1.eps,
+                    )
+        elif use_exact_modulate:
+            with nvtx_range("minimax_h3.transformer_block.exact_modulate"):
+                norm_hidden_states = exact_kernels.modulate(self.norm1(hidden_states), scale_msa, shift_msa,
+                                                            adaln_indices)
+        else:
+            with nvtx_range("minimax_h3.transformer_block.no_modulate_fusion"):
+                norm_hidden_states = self.norm1(hidden_states)
+                norm_hidden_states = norm_hidden_states * (
+                    1.0 + scale_msa.index_select(0, adaln_indices)) + shift_msa.index_select(0, adaln_indices)
+        with nvtx_range("minimax_h3.transformer_block.self_attention"):
+            attention_output = (self.attn(norm_hidden_states, rotary_emb, original_seq_len,
+                                          pre_quantized=attn_quantized) if attn_quantized is not None
+                                else self.attn(norm_hidden_states, rotary_emb, original_seq_len))
+        # The attention input is dead now. Keeping it until assignment below
+        # overlaps three full-width activations during the residual fusion.
+        del norm_hidden_states
+        ff_quantized = None
+        ff_scale = (self.ff.input_quantization_scale(hidden_states)
+                    if use_modulate_fusion and not torch.compiler.is_compiling() else None)
+        if ff_scale is not None:
+            from fastvideo.models.dits.minimax_h3_fusions.modulation_quant import residual_modulate_quantize_nvfp4
+
+            with nvtx_range("minimax_h3.transformer_block.modulate_quant_fusion"):
+                hidden_states, ff_quantized = residual_modulate_quantize_nvfp4(
+                    hidden_states, attention_output, gate_msa, self.norm2.weight, scale_mlp,
+                    shift_mlp, adaln_indices, self.norm2.eps, ff_scale,
+                )
+            # The following NVFP4 projection consumes only this tensor's shape.
+            norm_hidden_states = hidden_states
+        elif use_modulate_fusion:
+            if (self.mk_tier and mk_kernels.HAVE_TRITON and not torch.compiler.is_compiling()
+                    and self.norm2.eps == _MK_NORM_EPS):
+                if _wants_prequantized_linear(self.ff.fc_in) and not self.ff._should_chunk(hidden_states):
+                    hidden_states, norm_hidden_states, _pq_values, _pq_scales = (
+                        mk_kernels.residual_gate_rmsnorm_modulate(
+                            hidden_states, attention_output, gate_msa, self.norm2.weight, scale_mlp, shift_mlp,
+                            adaln_indices, prequantize=True))
+                    norm_hidden_states._mxfp8_prequantized = (_pq_values, _pq_scales, None)
+                else:
+                    hidden_states, norm_hidden_states = mk_kernels.residual_gate_rmsnorm_modulate(
+                        hidden_states, attention_output, gate_msa, self.norm2.weight, scale_mlp, shift_mlp,
+                        adaln_indices)
+            else:
+                with nvtx_range("minimax_h3.transformer_block.modulate_fusion"):
+                    hidden_states, norm_hidden_states = fused_residual_gate_rmsnorm_modulate(
+                        hidden_states,
+                        attention_output,
+                        gate_msa,
+                        self.norm2.weight,
+                        scale_mlp,
+                        shift_mlp,
+                        adaln_indices,
+                        self.norm2.eps,
+                    )
+        elif use_exact_modulate:
+            with nvtx_range("minimax_h3.transformer_block.exact_modulate"):
+                hidden_states = exact_kernels.gate_residual(hidden_states, gate_msa, attention_output, adaln_indices)
+                norm_hidden_states = exact_kernels.modulate(self.norm2(hidden_states), scale_mlp, shift_mlp,
+                                                            adaln_indices)
+        else:
+            with nvtx_range("minimax_h3.transformer_block.no_modulate_fusion"):
+                hidden_states = hidden_states + gate_msa.index_select(0, adaln_indices) * attention_output
+                norm_hidden_states = self.norm2(hidden_states)
+                norm_hidden_states = norm_hidden_states * (
+                    1.0 + scale_mlp.index_select(0, adaln_indices)) + shift_mlp.index_select(0, adaln_indices)
+        del attention_output
+        with nvtx_range("minimax_h3.transformer_block.feed_forward"), STAGES.span("feed_forward"):
+            feed_forward_output = (self.ff(norm_hidden_states, pre_quantized=ff_quantized)
+                                   if ff_quantized is not None else self.ff(norm_hidden_states))
+        if use_modulate_fusion and not torch.compiler.is_compiling():
+            if _next_block is not None and _next_block.fuse_modulate:
+                next_quant_scale = _next_block.attn.input_quantization_scale(hidden_states, rotary_emb)
+                if next_quant_scale is not None:
+                    from fastvideo.models.dits.minimax_h3_fusions.modulation_quant import (
+                        residual_modulate_quantize_nvfp4,
+                    )
+
+                    next_shift, next_scale, *_ = _next_block.adaln_proj(temb)
+                    return residual_modulate_quantize_nvfp4(
+                        hidden_states, feed_forward_output, gate_mlp, _next_block.norm1.weight,
+                        next_scale.to(hidden_states.dtype), next_shift.to(hidden_states.dtype),
+                        adaln_indices, _next_block.norm1.eps, next_quant_scale,
+                        round_residual_before_norm=True,
+                    )
+            if self.mk_tier and mk_kernels.HAVE_TRITON and not torch.compiler.is_compiling():
+                return mk_kernels.gated_residual(hidden_states, gate_mlp, feed_forward_output, adaln_indices)
+            return _gated_residual(hidden_states, gate_mlp, adaln_indices, feed_forward_output)
+        if use_exact_modulate:
+            return exact_kernels.gate_residual(hidden_states, gate_mlp, feed_forward_output, adaln_indices)
+        return hidden_states + gate_mlp.index_select(0, adaln_indices) * feed_forward_output
+
+
+class MiniMaxH3Transformer3DModel(BaseDiT):
+    """Joint H3 Transformer over one padless text/audio/video document.
+
+    The layout builder validates semantic rows before denoising. Sequence-
+    parallel padding is transport-only and `DistributedAttention` trims it
+    before attention.
+    """
+
+    _fsdp_shard_conditions = _CFG._fsdp_shard_conditions
+    _compile_conditions = _CFG._compile_conditions
+    _supported_attention_backends = _CFG._supported_attention_backends
+    param_names_mapping = _CFG.param_names_mapping
+    reverse_param_names_mapping = _CFG.reverse_param_names_mapping
+    lora_param_names_mapping = _CFG.lora_param_names_mapping
+    _keep_in_fp32_modules = frozenset({
+        "proj_in",
+        "audio_proj_in",
+        "time_embedder",
+        "proj_out",
+        "audio_proj_out",
+        "rope",
+    })
+
+    def _get_parameter_dtype(self, name: str, default_dtype: torch.dtype) -> torch.dtype:
+        """Keep the released input, timestep, and output projections in FP32.
+
+        Factorized AdaLN uses FP16; BF16 is ~1.7x worse there.
+        """
+        # Precedence: the factorized-AdaLN FP16 pin wins over
+        # uniform_parameter_dtype on purpose. Under FSDP's one-dtype rule the
+        # resulting mix hard-fails at load time, which beats silently training
+        # AdaLN in BF16. Rank-reduced checkpoints are inference artifacts --
+        # train from the full-rank release.
+        if getattr(self, "adaln_rank", None) is not None and (
+                ".adaln_proj." in name or name.startswith(("norm_out.linear.", "adaln_basis."))):
+            return torch.float16
+        if self.config.uniform_parameter_dtype:
+            return default_dtype
+        return torch.float32 if name.split(".", 1)[0] in self._keep_in_fp32_modules else default_dtype
+
+    def __init__(self, config: MiniMaxH3Config, hf_config: dict[str, Any]) -> None:
+        super().__init__(config, hf_config)
+        arch = config.arch_config
+        self.enabled_fusions = _enabled_minimax_h3_fusions()
+        if self.enabled_fusions:
+            if HAVE_TRITON:
+                logger.info(
+                    "MiniMax H3 inference fusions enabled: %s (CUDA inference-only; grad-enabled forwards "
+                    "fall back to eager; torch.compile captures opaque custom-op boundaries).",
+                    ",".join(sorted(self.enabled_fusions)))
+            else:
+                logger.warning(
+                    "FASTVIDEO_MINIMAX_H3_FUSIONS requested %s but Triton is unavailable; "
+                    "every forward stays on the eager path.", ",".join(sorted(self.enabled_fusions)))
+        self.use_mk_kernels = _MINIMAX_H3_MK_MODE in self.enabled_fusions
+        if self.use_mk_kernels and not mk_kernels.HAVE_TRITON:
+            logger.warning("FASTVIDEO_MINIMAX_H3_FUSIONS=mk requested but the MotionKernel kernels are "
+                           "unavailable (Triton missing); every forward stays on the eager path.")
+        self.enabled_exact_kernels = _enabled_minimax_h3_exact_kernels()
+        if self.enabled_exact_kernels:
+            if exact_kernels.HAVE_TRITON:
+                logger.info(
+                    "MiniMax H3 bit-exact kernels enabled: %s (CUDA BF16 inference-only; other inputs and any "
+                    "op whose FASTVIDEO_MINIMAX_H3_FUSIONS fusion is on keep their existing path).",
+                    ",".join(sorted(self.enabled_exact_kernels)))
+            else:
+                logger.warning(
+                    "FASTVIDEO_MINIMAX_H3_EXACT_KERNELS requested %s but Triton is unavailable; "
+                    "every forward stays on the eager path.", ",".join(sorted(self.enabled_exact_kernels)))
+        sp_world_size = get_sp_world_size() if model_parallel_is_initialized() else 1
+        if arch.num_attention_heads % sp_world_size:
+            raise ValueError(f"MiniMax H3 attention heads ({arch.num_attention_heads}) must be divisible by "
+                             f"sequence parallel size ({sp_world_size}).")
+
+        self.hidden_size = arch.hidden_size
+        self.num_attention_heads = arch.num_attention_heads
+        self.num_channels_latents = arch.in_channels
+        self.patch_size = tuple(int(value) for value in arch.patch_size)
+        video_patch_dim = arch.in_channels * math.prod(arch.patch_size)
+
+        self.proj_in = ReplicatedLinear(
+            video_patch_dim,
+            arch.hidden_size,
+            bias=True,
+            quant_config=config.quant_config,
+            prefix=f"{config.prefix}.proj_in",
+        )
+        self.audio_proj_in = ReplicatedLinear(
+            arch.audio_in_channels,
+            arch.hidden_size,
+            bias=True,
+            quant_config=config.quant_config,
+            prefix=f"{config.prefix}.audio_proj_in",
+        )
+        self.context_embedder = ReplicatedLinear(
+            arch.text_dim,
+            arch.hidden_size,
+            bias=True,
+            quant_config=config.quant_config,
+            prefix=f"{config.prefix}.context_embedder",
+        )
+        self.time_proj = Timesteps(
+            num_channels=arch.freq_dim,
+            flip_sin_to_cos=True,
+            downscale_freq_shift=0,
+        )
+        self.time_embedder = MLP(
+            arch.freq_dim,
+            arch.time_embed_hidden_dim,
+            arch.time_embed_dim,
+            act_type="silu",
+            quant_config=config.quant_config,
+            prefix=f"{config.prefix}.time_embedder",
+        )
+        self.adaln_rank: int | None = arch.adaln_rank
+        if self.adaln_rank is not None and config.uniform_parameter_dtype:
+            raise ValueError(
+                "Rank-reduced AdaLN checkpoints (adaln_rank set) cannot be trained: "
+                "uniform_parameter_dtype needs one dtype for every trainable "
+                "parameter, but factorized AdaLN weights are pinned to FP16 "
+                "(BF16 reconstructs them ~1.7x worse). Fine-tune the full-rank "
+                "checkpoint instead, then re-fit the basis with "
+                "scripts/checkpoint_conversion/convert_minimax_h3_adaln_rank.py.")
+        adaln_dim = self.adaln_rank or arch.time_embed_dim
+        self.adaln_basis = ReplicatedLinear(
+            arch.time_embed_dim,
+            self.adaln_rank,
+            bias=False,
+            quant_config=None,
+            prefix=f"{config.prefix}.adaln_basis",
+        ) if self.adaln_rank else None
+
+        self.rope = MiniMaxH3RotaryPosEmbed(arch.rope_freq_dim, arch.rope_theta)
+        # per-generation caches for loop-invariant work (see _rotary_for /
+        # _refined_text); plain attrs, never in state_dict
+        self._rope_cache: tuple | None = None
+        self._reduced_rope_cache: tuple | None = None
+        self._text_cache: tuple | None = None
+        self.token_refiner = MiniMaxH3TokenRefiner(
+            arch.hidden_size,
+            arch.num_attention_heads,
+            arch.attention_head_dim,
+            arch.ffn_dim,
+            arch.num_refiner_layers,
+            arch.norm_eps,
+            arch.qk_norm_eps,
+            arch.final_norm_eps,
+            # The refiner attends over the text stream only; the packed-sequence
+            # VSA backend must never be selected for it.
+            tuple(backend for backend in self.supported_attention_backends
+                  if backend != AttentionBackendEnum.VIDEO_SPARSE_ATTN_H3),
+            config.quant_config,
+            prefix=f"{config.prefix}.token_refiner",
+        )
+        bf16_blocks = parse_block_indices(envs.FASTVIDEO_NVFP4_FA4_BF16_BLOCKS.get())
+        unknown_blocks = sorted(index for index in bf16_blocks if index >= arch.num_layers)
+        if unknown_blocks:
+            raise ValueError(f"FASTVIDEO_NVFP4_FA4_BF16_BLOCKS {unknown_blocks} exceed the {arch.num_layers} "
+                             "transformer_blocks")
+        self.transformer_blocks = nn.ModuleList([
+            MiniMaxH3TransformerBlock(
+                arch.hidden_size,
+                arch.num_attention_heads,
+                arch.attention_head_dim,
+                arch.ffn_dim,
+                adaln_dim,
+                arch.norm_eps,
+                arch.qk_norm_eps,
+                self.supported_attention_backends,
+                config.quant_config,
+                prefix=f"{config.prefix}.transformer_blocks.{index}",
+                adaln_apply_silu=self.adaln_rank is None,
+                fuse_modulate="modulate" in self.enabled_fusions,
+                fuse_qknorm_rope="qknorm_rope" in self.enabled_fusions,
+                fuse_swiglu="swiglu" in self.enabled_fusions,
+                fa4_packed_varlen=envs.FASTVIDEO_MINIMAX_H3_FA4_PACKED_VARLEN.get(),
+                cudnn_sdpa=envs.FASTVIDEO_MINIMAX_H3_DENSE_ATTN.get() == "cudnn",
+                exact_kernels=self.enabled_exact_kernels,
+                vsa_fp4=config.vsa_fp4,
+                mk_tier=self.use_mk_kernels,
+                bf16_attention=index in bf16_blocks,
+            ) for index in range(arch.num_layers)
+        ])
+        self.norm_out = MiniMaxH3AdaLayerNormOut(
+            arch.hidden_size,
+            adaln_dim,
+            arch.final_norm_eps,
+            quant_config=config.quant_config,
+            prefix=f"{config.prefix}.norm_out",
+            apply_silu=self.adaln_rank is None,
+        )
+        # Parallel Decoding Distillation (PDD) students widen both output
+        # projections to ``pdd_steps`` heads, one per interval of a fixed fine
+        # time grid. The sampler fuses one block of heads per forward
+        # (``fuse_pdd_block``), so the fused output keeps the released width.
+        self.pdd_steps: int | None = arch.pdd_steps
+        self.proj_out = self._output_projection(arch.hidden_size, video_patch_dim, config, "proj_out")
+        self.audio_proj_out = self._output_projection(arch.hidden_size, arch.audio_in_channels, config,
+                                                      "audio_proj_out")
+        self.__post_init__()
+
+    def _output_projection(self, hidden_size: int, output_size: int, config: MiniMaxH3Config,
+                           name: str) -> ReplicatedLinear:
+        if self.pdd_steps is None:
+            return ReplicatedLinear(
+                hidden_size,
+                output_size,
+                bias=True,
+                quant_config=config.quant_config,
+                prefix=f"{config.prefix}.{name}",
+            )
+        return PDDReplicatedLinear(
+            hidden_size,
+            output_size,
+            grid_size=self.pdd_steps,
+            bias=True,
+            quant_config=config.quant_config,
+            prefix=f"{config.prefix}.{name}",
+        )
+
+    @property
+    def pdd_linears(self) -> dict[str, PDDReplicatedLinear]:
+        """The widened ``{"video": proj_out, "audio": audio_proj_out}`` heads."""
+        if self.pdd_steps is None:
+            # Not AttributeError: nn.Module.__getattr__ would swallow it and
+            # report a misleading missing-attribute message.
+            raise RuntimeError("This MiniMax H3 transformer has no PDD heads (arch_config.pdd_steps is None)")
+        return {"video": self.proj_out, "audio": self.audio_proj_out}
+
+    _PDD_HEAD_NAMES = ("proj_out", "audio_proj_out")
+
+    def _pdd_linear_for_parameter(self, name: str) -> PDDReplicatedLinear | None:
+        if self.pdd_steps is None:
+            return None
+        head, _, _ = name.rpartition(".")
+        if head in self._PDD_HEAD_NAMES:
+            return getattr(self, head)
+        return None
+
+
+    @property
+    def _fastvideo_shard_cache_key_extra(self) -> dict[str, Any] | None:
+        """Keep widened-head shards out of the base model's shard cache entry."""
+        return self.inference_config_overrides() or None
+
+
+    def inference_config_overrides(self) -> dict[str, Any]:
+        """Extra ``config.json`` keys a deployable checkpoint of this model needs."""
+        if self.pdd_steps is None:
+            return {}
+        return {"pdd_steps": self.pdd_steps}
+
+
+    def inference_export_expected_shape(self, output_key: str, base_shape: tuple[int, ...]) -> tuple[int, ...]:
+        """Return the PDD head shape for narrow or already-widened bases.
+
+        A continued PDD run may use an earlier exported PDD checkpoint as its
+        ``init_from`` model.  In that case the exporter's base component
+        already carries the same widened heads, so applying the grid factor a
+        second time would reject the live DCP state.  Accept either the
+        released single-head width or this transformer's exact grid width and
+        fail closed for every other structural shape.
+        """
+        linear = self._pdd_linear_for_parameter(output_key)
+        if linear is None:
+            return tuple(base_shape)
+        base_rows = int(base_shape[0])
+        if base_rows == linear.output_size:
+            return tuple(base_shape)
+        if base_rows != linear.head_output_size:
+            raise ValueError(
+                f"PDD export base tensor {output_key!r} has {base_rows} output rows; expected "
+                f"{linear.head_output_size} single-head rows or {linear.output_size} Grid-{linear.grid_size} rows"
+            )
+        return (linear.output_size, *tuple(base_shape[1:]))
+
+
+    def preprocess_loaded_weight(self, name: str, tensor: torch.Tensor) -> torch.Tensor:
+        """Expand narrow teacher heads; resumed wide heads pass through unchanged."""
+        linear = self._pdd_linear_for_parameter(name)
+        return tensor if linear is None else linear.expand_loaded_tensor(name, tensor)
+
+
+    @contextlib.contextmanager
+    def fuse_pdd_block(
+        self,
+        start: int,
+        end: int,
+        integration_weights: Mapping[str, torch.Tensor],
+        precision_decoding: torch.dtype,
+    ) -> Iterator[None]:
+        """Fuse fine-grid block ``[start, end)`` on both widened heads for the enclosed forwards."""
+        with fuse_pdd_heads(self.pdd_linears, start, end, integration_weights, precision_decoding):
+            yield
+
+    @staticmethod
+    def _compile_setup_device(attention: MiniMaxH3Attention) -> torch.device:
+        """Return the loaded device even when FP8 replaced the query weight."""
+        query_state = next(attention.to_q.parameters(), None)
+        if query_state is None:
+            query_state = next(attention.to_q.buffers(), None)
+        if query_state is None:
+            raise RuntimeError("MiniMax H3 to_q has no materialized parameter or buffer for compile setup.")
+        return query_state.device
+
+    def prepare_for_compile(self) -> None:
+        """Pipeline hook, called once right before torch.compile wraps the blocks.
+
+        Resolve each loaded VSA compression gate eagerly and tensorize its
+        layer identity so repeated blocks share one Dynamo graph. Generic and
+        training compile retain their established attention dispatch; only
+        the inference loader's separate ``prepare_for_regional_compile`` hook
+        may preselect the inference-only ptx_blackwell path.
+
+        The inference-only Triton fusions expose fake-backed custom operators,
+        so Dynamo can keep them active as opaque nodes inside each fullgraph
+        block instead of tracing into their launcher implementation.
+        """
+        gate_states: list[bool] = []
+        prepared_vsa_impls = 0
+        for block in self.transformer_blocks:
+            attention = block.attn
+            if attention.to_gate_compress is not None:
+                attention._resolve_gate_compress_for_compile()
+                assert attention._gate_compress_active is not None
+                gate_states.append(attention._gate_compress_active)
+            prepare_vsa = getattr(attention.distributed_attention.attn_impl, "prepare_for_compile", None)
+            if callable(prepare_vsa):
+                prepare_vsa(self._compile_setup_device(attention))
+                prepared_vsa_impls += 1
+        if gate_states:
+            logger.info(
+                "Resolved MiniMax H3 VSA compression gates before torch.compile: %d active, %d inactive",
+                sum(gate_states),
+                len(gate_states) - sum(gate_states),
+            )
+        if prepared_vsa_impls:
+            logger.info("Prepared %d MiniMax H3 VSA layer indices for torch.compile", prepared_vsa_impls)
+        if self.enabled_fusions:
+            logger.info(
+                "MiniMax H3 inference fusions remain active under torch.compile through custom-op boundaries: %s",
+                ",".join(sorted(self.enabled_fusions)),
+            )
+
+    def prepare_for_regional_compile(self) -> str | None:
+        """Resolve state used only by inference regional fullgraph compile."""
+        self.prepare_for_compile()
+        from fastvideo.layers.quantization.nvfp4_config import NVFP4QuantizeMethod
+
+        # Lazy policy resolution inside capture guards on each layer's unique prefix and mutates the first graph.
+        for module in self.modules():
+            method = getattr(module, "quant_method", None)
+            if isinstance(method, NVFP4QuantizeMethod):
+                method._static_activation_global_sf()
+                method._dynamic_activation_scale()
+        prepared_vsa_impls = 0
+        unsupported_reasons: set[str] = set()
+        for block in self.transformer_blocks:
+            attention = block.attn
+            prepare_vsa = getattr(attention.distributed_attention.attn_impl, "prepare_for_regional_compile", None)
+            if not callable(prepare_vsa):
+                continue
+            unsupported = prepare_vsa(self._compile_setup_device(attention))
+            if unsupported:
+                unsupported_reasons.add(str(unsupported))
+            prepared_vsa_impls += 1
+        if prepared_vsa_impls:
+            logger.info("Prepared %d MiniMax H3 VSA attention implementations for regional torch.compile",
+                        prepared_vsa_impls)
+        if unsupported_reasons:
+            return "; ".join(sorted(unsupported_reasons))
+        self._regional_compile_inputs = True
+        return None
+
+    def _block_input(self, shard: torch.Tensor) -> torch.Tensor:
+        """Give a sequence-parallel shard standard strides under regional compile, so block 0 shares one graph."""
+        if getattr(self, "_regional_compile_inputs", False):
+            return shard.clone(memory_format=torch.contiguous_format)
+        return shard
+
+    def materialize_non_persistent_buffers(
+        self,
+        device: torch.device,
+        dtype: torch.dtype | None = None,
+    ) -> None:
+        """Rebuild analytic RoPE state on the checkpoint loader device.
+
+        RoPE frequencies are absent from the checkpoint, so meta-device model
+        construction and device moves must derive the buffer from architecture
+        fields before the first forward pass.
+        """
+        del dtype
+        if self.rope.inv_freq.is_meta or self.rope.inv_freq.device != device:
+            arch = self.config.arch_config
+            inv_freq = 1.0 / (arch.rope_theta
+                              **(torch.arange(0, 2 * arch.rope_freq_dim, 2, device=device, dtype=torch.float32) /
+                                 (2 * arch.rope_freq_dim)))
+            self.rope._buffers["inv_freq"] = inv_freq
+
+    def _rotary_for(self,
+                    position_ids: torch.Tensor,
+                    dtype: torch.dtype,
+                    cache_name: str = "_rope_cache") -> tuple[torch.Tensor, torch.Tensor]:
+        """cos/sin depend only on positions; the denoising stage holds one
+        position_ids tensor for the whole loop, so cache per layout and
+        pre-cast once instead of rebuilding every step and re-casting in
+        every block. Holding the source tensor keeps the identity check safe
+        against id reuse. Token reduction keeps its pair positions in a
+        second slot so the two layouts do not evict each other."""
+        if torch.compiler.is_compiling():
+            cos, sin = self.rope(position_ids)
+            return cos.to(dtype), sin.to(dtype)
+        cached = getattr(self, cache_name)
+        if (cached is not None and cached[0] is position_ids and cached[1] == dtype
+                and cached[2][0].device == position_ids.device):
+            return cached[2]
+        cos, sin = self.rope(position_ids)
+        value = (cos.to(dtype), sin.to(dtype))
+        setattr(self, cache_name, (position_ids, dtype, value))
+        return value
+
+    def _enter_token_reduction(self, packed_hidden_states: torch.Tensor, plan: MiniMaxH3TokenReduction,
+                               sequence_length: int,
+                               sp_world_size: int) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+        """Pool video pairs; returns the reduced block input and the full rows plus pooled baseline to restore from.
+
+        Under sequence parallelism pooling changes how many rows each rank
+        holds, so the full sequence is gathered, pooled and sharded again.
+        """
+        with nvtx_range("minimax_h3.token_reduction.pool"):
+            if sp_world_size > 1:
+                packed_hidden_states = sequence_model_parallel_all_gather_with_unpad(packed_hidden_states,
+                                                                                      sequence_length,
+                                                                                      dim=1)
+            pooled = pool_token_pairs(packed_hidden_states, plan)
+            reduced = pooled
+            if sp_world_size > 1:
+                reduced = self._block_input(sequence_model_parallel_shard(pooled, dim=1)[0])
+        return reduced, (packed_hidden_states, pooled)
+
+    def _leave_token_reduction(self, packed_hidden_states: torch.Tensor, saved: tuple[torch.Tensor, torch.Tensor],
+                               plan: MiniMaxH3TokenReduction, sp_world_size: int) -> torch.Tensor:
+        """Restore the full sequence from the reduced stack's output."""
+        original, pooled = saved
+        with nvtx_range("minimax_h3.token_reduction.expand"):
+            if sp_world_size > 1:
+                packed_hidden_states = sequence_model_parallel_all_gather_with_unpad(packed_hidden_states,
+                                                                                      plan.reduced_length,
+                                                                                      dim=1)
+            restored = expand_token_pairs(original, packed_hidden_states, pooled, plan)
+            if sp_world_size > 1:
+                restored = self._block_input(sequence_model_parallel_shard(restored, dim=1)[0])
+        return restored
+
+    def attach_step_splice(self, late: nn.Module, from_step: int) -> None:
+        """Hand denoising steps ``from_step`` onward to ``late`` (same architecture, other weights).
+
+        Early DMD steps fix layout and object count, late ones texture and detail, so two checkpoints
+        can split the trajectory. ``late`` is kept out of this module's children: it is placed, offloaded
+        and checkpointed on its own.
+        """
+        object.__setattr__(self, "_splice_late", late)
+        self._splice_from_step = int(from_step)
+
+    def enable_adaln_host_cache(self, table_path: str | None = None, *, keep_resident: bool = False) -> None:
+        """Move every block's AdaLN projection to pinned host memory behind a per-timestep cache.
+
+        With ``table_path`` (written by FASTVIDEO_H3_ADALN_DUMP), the cache is prefilled from precomputed
+        modulation tables and the projection weights are dropped entirely.
+        """
+        tables = None
+        if table_path:
+            import ast
+            raw = torch.load(table_path, map_location="cpu")
+            tables = {int(i): {ast.literal_eval(k): v for k, v in blk.items()} for i, blk in raw.items()}
+        for index, block in enumerate(self.transformer_blocks):
+            block.adaln_proj.enable_host_cache(None if tables is None else tables[index], keep_resident=keep_resident)
+        self._adaln_host_cache = True
+        self._adaln_dumped_entries = -1
+
+    def _move_adaln_tables(self, device: torch.device) -> None:
+        for block in self.transformer_blocks:
+            cache = block.adaln_proj._modulation_cache
+            for key, value in cache.items():
+                if value.device != device:
+                    cache[key] = value.to(device)
+
+    def _maybe_dump_adaln_tables(self) -> None:
+        path = envs.FASTVIDEO_H3_ADALN_DUMP.get()
+        if not path:
+            return
+        entries = sum(len(b.adaln_proj._modulation_cache) for b in self.transformer_blocks)
+        if entries == self._adaln_dumped_entries:
+            return
+        self._adaln_dumped_entries = entries
+        if model_parallel_is_initialized() and get_sp_group().rank_in_group != 0:
+            return
+        torch.save({i: {repr(k): v.detach().cpu() for k, v in b.adaln_proj._modulation_cache.items()}
+                    for i, b in enumerate(self.transformer_blocks)}, path)
+        first = self.transformer_blocks[0].adaln_proj.__dict__.get("_modulation_inputs", {})
+        torch.save({repr(k): v.detach().cpu() for k, v in first.items()}, path + ".inputs")
+        logger.info("Dumped AdaLN modulation tables (%d entries) to %s", entries, path)
+
+    def _refined_text(
+        self,
+        encoder_hidden_states: torch.Tensor,
+        text_attn_metadata: AttentionMetadata | None = None,
+    ) -> torch.Tensor:
+        """The prompt embedding is constant across the denoising loop and the
+        refiner blocks are timestep-free, so refine once per generation
+        (saves two transformer blocks and four collectives per step). Skipped
+        under grad (training needs the graph) and under compile."""
+        cacheable = not torch.is_grad_enabled() and not torch.compiler.is_compiling()
+        if (cacheable and self._text_cache is not None and self._text_cache[0] is encoder_hidden_states
+                and self._text_cache[1].device == encoder_hidden_states.device
+                and self._text_cache[2] is text_attn_metadata):
+            return self._text_cache[1]
+        text_embeds, _ = self.context_embedder(encoder_hidden_states.to(self.context_embedder.weight.dtype))
+        text_original_seq_len = text_embeds.shape[1]
+        sp_world_size = get_sp_world_size() if model_parallel_is_initialized() else 1
+        if sp_world_size > 1:
+            text_embeds = self._block_input(sequence_model_parallel_shard(text_embeds, dim=1)[0])
+        text_embeds = self.token_refiner(text_embeds, text_original_seq_len, attn_metadata=text_attn_metadata)
+        if sp_world_size > 1:
+            text_embeds = sequence_model_parallel_all_gather_with_unpad(
+                text_embeds,
+                text_original_seq_len,
+                dim=1,
+            )
+        if cacheable:
+            self._text_cache = (encoder_hidden_states, text_embeds, text_attn_metadata)
+        return text_embeds
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        audio_hidden_states: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
+        timestep: torch.Tensor,
+        timestep_indices: torch.Tensor,
+        token_tags: torch.Tensor,
+        position_ids: torch.Tensor,
+        video_indices: torch.Tensor,
+        audio_indices: torch.Tensor,
+        text_indices: torch.Tensor,
+        text_attn_metadata: AttentionMetadata | None = None,
+        token_reduction: MiniMaxH3TokenReduction | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Predict video and audio velocities from one caller-defined packed layout.
+
+        ``token_reduction`` (inference only) runs blocks ``[begin, end)`` on
+        horizontally paired generated-video rows; see minimax_h3_token_reduction.
+        """
+        late = self.__dict__.get("_splice_late")
+        if late is not None and get_forward_context().current_timestep >= self._splice_from_step:
+            return late(hidden_states, audio_hidden_states, encoder_hidden_states, timestep, timestep_indices,
+                        token_tags, position_ids, video_indices, audio_indices, text_indices,
+                        text_attn_metadata=text_attn_metadata, token_reduction=token_reduction)
+        if position_ids.ndim != 2 or position_ids.shape[-1] != 3:
+            raise ValueError(f"position_ids must have shape (seq_len, 3), got {tuple(position_ids.shape)}.")
+        sequence_length = position_ids.shape[0]
+        if token_tags.shape != (sequence_length, ) or timestep_indices.shape != (sequence_length, ):
+            raise ValueError("token_tags and timestep_indices must both match the packed sequence length.")
+        if hidden_states.shape[1] != video_indices.numel():
+            raise ValueError("hidden_states row count must match video_indices.")
+        if audio_hidden_states.shape[1] != audio_indices.numel():
+            raise ValueError("audio_hidden_states row count must match audio_indices.")
+        if encoder_hidden_states.shape[1] != text_indices.numel():
+            raise ValueError("encoder_hidden_states row count must match text_indices.")
+        if token_reduction is not None:
+            if torch.is_grad_enabled():
+                raise ValueError("MiniMax H3 token reduction is inference-only.")
+            if token_reduction.sequence_length != sequence_length:
+                raise ValueError(f"Token reduction was built for {token_reduction.sequence_length} rows, "
+                                 f"the packed sequence has {sequence_length}.")
+            if not 0 <= token_reduction.begin < token_reduction.end <= len(self.transformer_blocks):
+                raise ValueError(f"Token reduction blocks {token_reduction.begin}:{token_reduction.end} must lie in "
+                                 f"0:{len(self.transformer_blocks)}.")
+
+        video_embeds, _ = self.proj_in(hidden_states.to(self.proj_in.weight.dtype))
+        audio_embeds, _ = self.audio_proj_in(audio_hidden_states.to(self.audio_proj_in.weight.dtype))
+        text_embeds = self._refined_text(encoder_hidden_states, text_attn_metadata=text_attn_metadata)
+        rotary_emb = self._rotary_for(position_ids, text_embeds.dtype)
+        sp_world_size = get_sp_world_size() if model_parallel_is_initialized() else 1
+
+        # Real text/video/audio indices partition the prefix; optional capacity
+        # rows trail it and have no input/output modality indices. Fail closed
+        # if those rows lack attention boundaries, then initialize them to zero.
+        real_tokens = text_indices.numel() + video_indices.numel() + audio_indices.numel()
+        pad_tokens = sequence_length - real_tokens
+        if pad_tokens < 0:
+            raise ValueError("Real H3 token counts exceed the packed sequence length")
+        if pad_tokens and token_reduction is not None:
+            raise ValueError("MiniMax H3 token reduction does not support capacity padding rows.")
+        if pad_tokens:
+            metadata = get_forward_context().attn_metadata
+            packed_sequence = getattr(metadata, "packed_sequence", None)
+            metadata_padding = getattr(packed_sequence if packed_sequence is not None else metadata, "pad_tokens", 0)
+            if metadata_padding != pad_tokens:
+                raise ValueError("H3 capacity padding requires matching masked attention metadata")
+            packed_hidden_states = text_embeds.new_zeros((text_embeds.shape[0], sequence_length, text_embeds.shape[-1]))
+        else:
+            packed_hidden_states = text_embeds.new_empty((text_embeds.shape[0], sequence_length, text_embeds.shape[-1]))
+        packed_hidden_states.index_copy_(1, text_indices, text_embeds)
+        packed_hidden_states.index_copy_(1, video_indices, video_embeds.to(text_embeds.dtype))
+        packed_hidden_states.index_copy_(1, audio_indices, audio_embeds.to(text_embeds.dtype))
+
+        temb = self.time_proj(timestep)
+        temb = self.time_embedder(temb.to(self.time_embedder.fc_in.weight.dtype))
+        if self.adaln_basis is not None:
+            temb, _ = self.adaln_basis(F.silu(temb).to(self.adaln_basis.weight.dtype))
+        adaln_indices = timestep_indices * MINIMAX_H3_MODALITY_NUM + token_tags
+        local_timestep_indices = timestep_indices
+        original_seq_len = sequence_length
+        reduced_rotary_emb = reduced_adaln_indices = None
+        if token_reduction is not None:
+            # A pair takes its first source's modulation row and the mean of both positions.
+            reduced_rotary_emb = self._rotary_for(token_reduction.position_ids, text_embeds.dtype,
+                                                  "_reduced_rope_cache")
+            reduced_adaln_indices = adaln_indices.index_select(0, token_reduction.first)
+
+        if sp_world_size > 1:
+            packed_hidden_states = self._block_input(sequence_model_parallel_shard(packed_hidden_states, dim=1)[0])
+            rotary_cos, _ = sequence_model_parallel_shard(rotary_emb[0], dim=0)
+            rotary_sin, _ = sequence_model_parallel_shard(rotary_emb[1], dim=0)
+            adaln_indices, _ = sequence_model_parallel_shard(adaln_indices, dim=0)
+            local_timestep_indices, _ = sequence_model_parallel_shard(local_timestep_indices, dim=0)
+            rotary_emb = (rotary_cos, rotary_sin)
+            if reduced_rotary_emb is not None:
+                reduced_rotary_emb = (sequence_model_parallel_shard(reduced_rotary_emb[0], dim=0)[0],
+                                      sequence_model_parallel_shard(reduced_rotary_emb[1], dim=0)[0])
+                reduced_adaln_indices, _ = sequence_model_parallel_shard(reduced_adaln_indices, dim=0)
+
+        if getattr(self, "_adaln_host_cache", False):
+            # One host read per forward keys every block's modulation cache by the timestep values.
+            key = (tuple(timestep.reshape(-1).tolist()), tuple(temb.shape), str(temb.dtype))
+            for block in self.transformer_blocks:
+                block.adaln_proj._cache_key = key
+            self._move_adaln_tables(temb.device)
+
+        # Keep cross-block preparation local to this forward. Compiled/wrapped
+        # blocks retain their normal tensor-only interface. Token reduction changes
+        # the sequence between blocks, so it keeps the per-block path.
+        cross_block = (token_reduction is None and not torch.compiler.is_compiling()
+                       and getattr(self, "_adaln_host_cache", False)
+                       and _can_run_minimax_h3_fusion(packed_hidden_states)
+                       and packed_hidden_states.dtype == torch.bfloat16
+                       and all(type(b) is MiniMaxH3TransformerBlock
+                               and getattr(b.forward, "__func__", None) is MiniMaxH3TransformerBlock.forward
+                               and getattr(b, "_compiled_call_impl", None) is None
+                               and not b._forward_pre_hooks and not b._forward_hooks
+                               and b.norm1.weight.device == packed_hidden_states.device
+                               for b in self.transformer_blocks))
+        # Reduced blocks attend over the shorter sequence, so they read its own
+        # attention metadata from the forward context; the full one is put back
+        # on exit and on error.
+        forward_context = get_forward_context() if token_reduction is not None else None
+        full_attn_metadata = forward_context.attn_metadata if forward_context is not None else None
+        reduction_saved = None
+        attention_prepared = None
+        try:
+            # The eager driver owns profiling markers while each block's compiled
+            # forward owns the graph that the marker surrounds.
+            for block_index, block in enumerate(self.transformer_blocks):
+                if token_reduction is not None and block_index == token_reduction.begin:
+                    assert forward_context is not None
+                    packed_hidden_states, reduction_saved = self._enter_token_reduction(
+                        packed_hidden_states, token_reduction, original_seq_len, sp_world_size)
+                    forward_context.attn_metadata = token_reduction.attn_metadata
+                if token_reduction is not None and block_index == token_reduction.end:
+                    assert forward_context is not None and reduction_saved is not None
+                    packed_hidden_states = self._leave_token_reduction(packed_hidden_states, reduction_saved,
+                                                                       token_reduction, sp_world_size)
+                    forward_context.attn_metadata = full_attn_metadata
+                    reduction_saved = None
+                if reduction_saved is None:
+                    block_adaln_indices, block_rotary_emb, block_seq_len = adaln_indices, rotary_emb, original_seq_len
+                else:
+                    assert token_reduction is not None and reduced_adaln_indices is not None
+                    assert reduced_rotary_emb is not None
+                    block_adaln_indices, block_rotary_emb = reduced_adaln_indices, reduced_rotary_emb
+                    block_seq_len = token_reduction.reduced_length
+                if STAGES.enabled:
+                    logger.info("H3_MEMORY_BLOCK %d allocated=%.3f GiB reserved=%.3f GiB", block_index,
+                                torch.cuda.memory_allocated() / 2**30, torch.cuda.memory_reserved() / 2**30)
+                with nvtx_range(f"minimax_h3.transformer_block.{block_index}"), STAGES.span("block_total"):
+                    if cross_block:
+                        next_block = (self.transformer_blocks[block_index + 1]
+                                      if block_index + 1 < len(self.transformer_blocks) else None)
+                        result = block(
+                            packed_hidden_states, temb, adaln_indices, rotary_emb, original_seq_len,
+                            _attention_prepared=attention_prepared, _next_block=next_block,
+                        )
+                        if isinstance(result, tuple):
+                            packed_hidden_states, attention_prepared = result
+                        else:
+                            packed_hidden_states, attention_prepared = result, None
+                    else:
+                        packed_hidden_states = block(
+                            packed_hidden_states,
+                            temb,
+                            block_adaln_indices,
+                            block_rotary_emb,
+                            block_seq_len,
+                        )
+            if reduction_saved is not None:
+                assert token_reduction is not None
+                packed_hidden_states = self._leave_token_reduction(packed_hidden_states, reduction_saved,
+                                                                   token_reduction, sp_world_size)
+                reduction_saved = None
+        finally:
+            if forward_context is not None:
+                forward_context.attn_metadata = full_attn_metadata
+
+        packed_hidden_states = self.norm_out(
+            packed_hidden_states,
+            temb,
+            local_timestep_indices,
+        ).to(self.proj_out.weight.dtype)
+        video_output, _ = self.proj_out(packed_hidden_states)
+        audio_output, _ = self.audio_proj_out(packed_hidden_states)
+        if sp_world_size > 1:
+            video_output = sequence_model_parallel_all_gather_with_unpad(video_output, original_seq_len, dim=1)
+            audio_output = sequence_model_parallel_all_gather_with_unpad(audio_output, original_seq_len, dim=1)
+        video_output = video_output.index_select(1, video_indices)
+        audio_output = audio_output.index_select(1, audio_indices)
+
+        if getattr(self, "_adaln_host_cache", False):
+            self._maybe_dump_adaln_tables()
+        if STAGES.enabled:
+            stages = STAGES.flush()
+            if not model_parallel_is_initialized() or get_sp_group().rank_in_group == 0:
+                logger.info("H3_STAGE_MS %s", json.dumps(stages))
+        return video_output, audio_output
+
+
+EntryClass = MiniMaxH3Transformer3DModel

@@ -1,0 +1,301 @@
+# SPDX-License-Identifier: Apache-2.0
+import pytest
+import fastvideo.envs as envs
+import torch
+from torch.testing import assert_close
+
+import fastvideo.envs as envs
+from fastvideo.configs.models.vaes.minimax_h3_video import (
+    MiniMaxH3VideoVAEArchConfig,
+    MiniMaxH3VideoVAEConfig,
+)
+from fastvideo.models.vaes.minimax_h3_video import AutoencoderKLMiniMaxH3
+
+
+def _tiny_vae() -> AutoencoderKLMiniMaxH3:
+    arch = MiniMaxH3VideoVAEArchConfig(
+        latent_channels=4,
+        block_out_channels=(32, 32),
+        layers_per_block=1,
+        spatial_downsample_factors=(2, 2),
+        temporal_downsample_factors=(2, 2),
+        decoder_num_layers=1,
+        decoder_num_attention_heads=1,
+        decoder_attention_head_dim=8,
+        decoder_num_register_tokens=2,
+        decoder_ffn_mult=1,
+        latents_mean=(0.0, ) * 4,
+        latents_std=(1.0, ) * 4,
+    )
+    return AutoencoderKLMiniMaxH3(
+        MiniMaxH3VideoVAEConfig(
+            arch_config=arch,
+            use_tiling=False,
+            use_temporal_tiling=False,
+            use_parallel_tiling=False,
+        )).eval()
+
+
+@torch.inference_mode()
+def test_encode_pixels_matches_encode() -> None:
+    torch.manual_seed(20260810)
+    vae = _tiny_vae()
+    pixels = torch.randint(0, 256, (1, 3, 22, 16, 16), dtype=torch.uint8)
+    expected = vae.encode(vae.normalize_pixels(pixels.float().div(255))).latent_dist.parameters
+    assert_close(vae.encode_pixels(pixels).latent_dist.parameters, expected, atol=0.0, rtol=0.0)
+
+    float_pixels = torch.rand(1, 3, 22, 16, 16)
+    original_pixels = float_pixels.clone()
+    expected = vae.encode(vae.normalize_pixels(float_pixels)).latent_dist.parameters
+    actual = vae.encode_pixels(float_pixels).latent_dist.parameters
+    assert_close(float_pixels, original_pixels, atol=0.0, rtol=0.0)
+    assert_close(actual, expected, atol=0.0, rtol=0.0)
+
+    with pytest.raises(ValueError, match="must remain on CPU"):
+        vae.encode_pixels(torch.empty(1, 3, 1, 16, 16, device="meta"))
+
+
+def _legacy_decode(vae: AutoencoderKLMiniMaxH3, z: torch.Tensor) -> torch.Tensor:
+    """Verbatim pre-streaming ``_decode`` (main @ 8208536cd) as a reference oracle."""
+    tokens_chunk_size = vae.tokens_chunk_size
+    token_drop = vae.config.token_drop
+    temporal_ratio = vae.temporal_compression_ratio
+    chunk_num_frames = tokens_chunk_size * temporal_ratio
+    num_tokens = z.shape[2] + token_drop
+    pad_tokens = (-num_tokens) % tokens_chunk_size
+    num_chunks = (num_tokens + pad_tokens) // tokens_chunk_size - int(token_drop > 0)
+    if pad_tokens > 0:
+        z = torch.cat([z, z[:, :, -1:].repeat(1, 1, pad_tokens, 1, 1)], dim=2)
+
+    decoded_chunks = []
+    overlap = None
+    for index in range(num_chunks):
+        start = index * tokens_chunk_size
+        clip = vae._decode_clip(z[:, :, start:start + tokens_chunk_size + vae.token_overlap])
+        for overlap_index in range(int(token_drop > 0) + 1):
+            frame_start = overlap_index * chunk_num_frames
+            chunk = clip[:, :, frame_start:frame_start + chunk_num_frames]
+            chunk = chunk[:, :, vae.frame_pre_padding:]
+            if overlap_index == 0:
+                if overlap is not None:
+                    chunk = vae._blend(overlap, chunk, vae.frame_overlap, dim=-3)
+                decoded_chunks.append(chunk)
+            else:
+                overlap = chunk
+    if overlap is not None:
+        decoded_chunks.append(overlap)
+    decoded = torch.cat(decoded_chunks, dim=2)
+
+    if pad_tokens > 0:
+        intra_tail = vae.config.clip_length % temporal_ratio
+        num_tokens_before_pad = z.shape[2] - pad_tokens
+        pad_frames = sum(intra_tail if intra_tail and (num_tokens_before_pad + offset) %
+                         tokens_chunk_size == 0 else temporal_ratio for offset in range(pad_tokens))
+        decoded = decoded[:, :, :-pad_frames]
+    return decoded
+
+
+@pytest.mark.parametrize("latent_frames", (2, 12))
+@torch.inference_mode()
+def test_decode_to_pixels_matches_decode(latent_frames: int) -> None:
+    torch.manual_seed(20260810)
+    vae = _tiny_vae()
+    latents = torch.randn(1, 4, latent_frames, 4, 4)
+    expected = vae.denormalize_pixels(vae.decode(latents).sample.float()).clamp_(0, 1)
+    actual = torch.empty(vae.decoded_pixel_shape(latents.shape), dtype=torch.float32)
+
+    vae.decode_to_pixels(latents, actual)
+
+    assert_close(actual, expected, atol=0.0, rtol=0.0)
+
+
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="needs CUDA"))])
+@torch.inference_mode()
+def test_decode_to_pixels_uint8_matches_fp32_quantization(device: str) -> None:
+    torch.manual_seed(20260810)
+    vae = _tiny_vae().to(device)
+    latents = torch.randn(1, 4, 12, 4, 4, device=device)
+    fp32 = torch.empty(vae.decoded_pixel_shape(latents.shape), dtype=torch.float32)
+    streamed = torch.empty(vae.decoded_pixel_shape(latents.shape), dtype=torch.uint8)
+
+    vae.decode_to_pixels(latents, fp32)
+    vae.decode_to_pixels(latents, streamed)
+
+    assert torch.equal(streamed, fp32.mul_(255).clamp_(0, 255).to(torch.uint8))
+
+
+@torch.inference_mode()
+def test_batched_tile_encode_matches_per_tile(monkeypatch, env_overrides) -> None:
+    torch.manual_seed(20260810)
+    vae = _tiny_vae()
+    vae.enable_tiling(tile_sample_min_height=16,
+                      tile_sample_min_width=16,
+                      tile_sample_min_overlap_height=8,
+                      tile_sample_min_overlap_width=8)
+    pixels = torch.rand(1, 3, 1, 32, 32)
+
+    env_overrides.enter_context(envs.FASTVIDEO_H3_VAE_ENCODE_TILE_BATCH.override(1))
+    per_tile = vae.encode(vae.normalize_pixels(pixels)).latent_dist.parameters
+    env_overrides.enter_context(envs.FASTVIDEO_H3_VAE_ENCODE_TILE_BATCH.override(8))
+    batched = vae.encode(vae.normalize_pixels(pixels)).latent_dist.parameters
+
+    assert_close(batched, per_tile, atol=1e-5, rtol=1e-5)
+
+
+# 3: one chunk with pad tokens; 6: pad hitting the intra-clip tail;
+# 12: two blended chunks without padding; 13: three chunks plus pad trim.
+@pytest.mark.parametrize("latent_frames", (3, 6, 12, 13))
+@torch.inference_mode()
+def test_decode_matches_legacy_algorithm(latent_frames: int) -> None:
+    """The chunk iterator must stay bit-exact with the pre-streaming decode."""
+    torch.manual_seed(20260811 + latent_frames)
+    vae = _tiny_vae()
+    latents = torch.randn(1, 4, latent_frames, 4, 4)
+    expected = _legacy_decode(vae, latents)
+
+    decoded = vae.decode(latents).sample
+    assert_close(decoded, expected, atol=0.0, rtol=0.0)
+
+    streamed = torch.empty(vae.decoded_pixel_shape(latents.shape), dtype=torch.float32)
+    vae.decode_to_pixels(latents, streamed)
+    assert_close(streamed, vae.denormalize_pixels(expected.float()).clamp_(0, 1), atol=0.0, rtol=0.0)
+
+
+@torch.inference_mode()
+def test_streaming_slicing_matches_unbatched() -> None:
+    torch.manual_seed(20260812)
+    vae = _tiny_vae()
+    vae.enable_slicing()
+
+    latents = torch.randn(2, 4, 7, 4, 4)
+    expected = vae.denormalize_pixels(vae.decode(latents).sample.float()).clamp_(0, 1)
+    actual = torch.empty(vae.decoded_pixel_shape(latents.shape), dtype=torch.float32)
+    vae.decode_to_pixels(latents, actual)
+    assert_close(actual, expected, atol=0.0, rtol=0.0)
+
+    pixels = torch.randint(0, 256, (2, 3, 22, 16, 16), dtype=torch.uint8)
+    expected_moments = vae.encode(vae.normalize_pixels(pixels.float().div(255))).latent_dist.parameters
+    assert_close(vae.encode_pixels(pixels).latent_dist.parameters, expected_moments, atol=0.0, rtol=0.0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="pinned-buffer streaming requires CUDA")
+@torch.inference_mode()
+def test_decode_to_pixels_pinned_buffer_matches_dense_on_cuda() -> None:
+    """Async chunk copies into a pinned buffer must equal the dense decode."""
+    torch.manual_seed(20260813)
+    vae = _tiny_vae().to("cuda")
+    latents = torch.randn(1, 4, 12, 4, 4, device="cuda")
+    expected = vae.denormalize_pixels(vae.decode(latents).sample.float()).clamp_(0, 1).cpu()
+
+    pinned = torch.empty(vae.decoded_pixel_shape(latents.shape), dtype=torch.float32, pin_memory=True)
+    vae.decode_to_pixels(latents, pinned)
+
+    assert_close(pinned, expected, atol=0.0, rtol=0.0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="pageable-buffer streaming requires CUDA")
+@torch.inference_mode()
+def test_decode_to_pixels_pageable_buffer_matches_dense_on_cuda() -> None:
+    """The allocation fallback's blocking chunk copies must equal dense decode."""
+    torch.manual_seed(20260814)
+    vae = _tiny_vae().to("cuda")
+    latents = torch.randn(1, 4, 12, 4, 4, device="cuda")
+    expected = vae.denormalize_pixels(vae.decode(latents).sample.float()).clamp_(0, 1).cpu()
+
+    pageable = torch.empty(vae.decoded_pixel_shape(latents.shape), dtype=torch.float32)
+    vae.decode_to_pixels(latents, pageable)
+
+    assert not pageable.is_pinned()
+    assert_close(pageable, expected, atol=0.0, rtol=0.0)
+
+
+def test_decode_to_pixels_rejects_incomplete_output(monkeypatch) -> None:
+    vae = _tiny_vae()
+    latents = torch.randn(1, 4, 2, 4, 4)
+    output = torch.empty(vae.decoded_pixel_shape(latents.shape), dtype=torch.float32)
+    monkeypatch.setattr(vae, "_decode_chunks", lambda _: iter(()))
+
+    with pytest.raises(RuntimeError, match="wrote 0 frames"):
+        vae.decode_to_pixels(latents, output)
+
+
+def test_tile_batch_defaults_to_eight(env_overrides) -> None:
+    from fastvideo.models.vaes.minimax_h3_video import _tile_batch_size
+
+    env_overrides.enter_context(envs.FASTVIDEO_H3_VAE_TILE_BATCH.override(None))
+    assert _tile_batch_size() == 8
+    env_overrides.enter_context(envs.FASTVIDEO_H3_VAE_TILE_BATCH.override(3))
+    assert _tile_batch_size() == 3
+    env_overrides.enter_context(envs.FASTVIDEO_H3_VAE_TILE_BATCH.override(0))
+    assert _tile_batch_size() == 1
+
+
+def test_dynamic_nvfp4_act_scale_decodes_per_tile(env_overrides) -> None:
+    from fastvideo.models.vaes.minimax_h3_nvfp4_decoder import NVFP4DecoderLinear
+    from fastvideo.models.vaes.minimax_h3_video import _tile_batch_size
+
+    decoder = torch.nn.Module()
+    decoder.proj = NVFP4DecoderLinear(torch.zeros(16, 16), None, None, torch.float32, act_scale="dynamic")
+    env_overrides.enter_context(envs.FASTVIDEO_H3_VAE_TILE_BATCH.override(8))
+    assert _tile_batch_size(decoder) == 1
+    assert _tile_batch_size() == 8
+
+    decoder.proj.act_scale = "static"
+    assert _tile_batch_size(decoder) == 8
+    decoder.proj.act_scale = "unit"
+    assert _tile_batch_size(decoder) == 8
+    assert _tile_batch_size(torch.nn.Linear(16, 16)) == 8
+
+
+@torch.inference_mode()
+def test_dynamic_nvfp4_act_scale_decodes_one_tile_per_call(env_overrides) -> None:
+    from fastvideo.models.vaes.minimax_h3_nvfp4_decoder import NVFP4DecoderLinear
+
+    torch.manual_seed(20260814)
+    vae = _tiny_vae()
+    vae.enable_tiling(tile_sample_min_height=8,
+                      tile_sample_min_width=8,
+                      tile_sample_min_overlap_height=2,
+                      tile_sample_min_overlap_width=2)
+    latents = torch.randn(1, 4, 12, 4, 4)
+    env_overrides.enter_context(envs.FASTVIDEO_H3_VAE_TILE_BATCH.override(8))
+    calls = []
+    decoder_forward = vae.decoder.forward
+
+    def record_batch(hidden_states):
+        calls.append(hidden_states.shape[0])
+        return decoder_forward(hidden_states)
+
+    vae.decoder.forward = record_batch
+    batched = torch.empty(vae.decoded_pixel_shape(latents.shape), dtype=torch.float32)
+    vae.decode_to_pixels(latents, batched)
+    batched_calls = len(calls)
+
+    calls.clear()
+    vae.decoder.dynamic_probe = NVFP4DecoderLinear(torch.zeros(16, 16), None, None, torch.float32, act_scale="dynamic")
+    per_tile = torch.empty(vae.decoded_pixel_shape(latents.shape), dtype=torch.float32)
+    vae.decode_to_pixels(latents, per_tile)
+
+    assert len(calls) > batched_calls
+    assert all(size == 1 for size in calls)
+    assert_close(per_tile, batched, atol=1e-6, rtol=0.0)
+
+
+@torch.inference_mode()
+def test_batched_tile_decode_matches_per_tile(env_overrides) -> None:
+    torch.manual_seed(20260814)
+    vae = _tiny_vae()
+    vae.enable_tiling(tile_sample_min_height=8,
+                      tile_sample_min_width=8,
+                      tile_sample_min_overlap_height=2,
+                      tile_sample_min_overlap_width=2)
+    latents = torch.randn(1, 4, 12, 4, 4)
+    outputs = {}
+    for tile_batch in (1, 8):
+        env_overrides.enter_context(envs.FASTVIDEO_H3_VAE_TILE_BATCH.override(tile_batch))
+        output = torch.empty(vae.decoded_pixel_shape(latents.shape), dtype=torch.float32)
+        vae.decode_to_pixels(latents, output)
+        outputs[tile_batch] = output
+
+    assert_close(outputs[1], outputs[8], atol=1e-6, rtol=0.0)

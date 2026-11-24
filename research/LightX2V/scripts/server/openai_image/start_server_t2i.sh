@@ -1,0 +1,21 @@
+#!/bin/bash
+
+# set path firstly
+lightx2v_path=/path/to/LightX2V
+model_path=/path/to/Qwen-Image-2512
+
+export CUDA_VISIBLE_DEVICES=0
+
+# set environment variables
+source ${lightx2v_path}/scripts/base/base.sh
+export LORA_DTYPE="${LORA_DTYPE:-FP32}"
+
+# Start API server with distributed inference service
+python -m lightx2v.server \
+--model_cls qwen_image \
+--task t2i \
+--model_path $model_path \
+--config_json ${lightx2v_path}/configs/qwen_image/qwen_image_t2i_2512_distill.json \
+--port 8000
+
+echo "Service stopped"

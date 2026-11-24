@@ -1,0 +1,72 @@
+[project]
+name = "turbodiffusion"
+description = "TurboDiffusion: video generation acceleration framework that could accelerate end-to-end video generation by 100-205x with negligible video quality loss."
+version = "1.0.0"
+authors = [
+  { name = "Jintao Zhang" },
+  { name = "Kaiwen Zheng" },
+  { name = "Kai Jiang" },
+  { name = "Haoxu Wang" },
+]
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: Apache Software License",
+]
+
+dependencies = [
+  "torch>=2.7.0",
+  "torchvision",
+  "triton>=3.3.0",
+  "flash-attn",
+  "einops",
+  "numpy",
+  "pillow",
+  "loguru",
+  "imageio[ffmpeg]",
+  "pandas",
+  "PyYAML",
+  "omegaconf",
+  "attrs",
+  "fvcore",
+  "ftfy",
+  "regex",
+  "transformers",
+  "nvidia-ml-py",
+  "prompt-toolkit>=3.0",
+  "rich>=13.0",
+]
+
+[build-system]
+requires = [
+  "setuptools>=62",
+  "wheel>=0.38",
+  "packaging>=21",
+  "torch>=2.7.0",
+  "ninja",
+]
+build-backend = "setuptools.build_meta"
+
+[project.scripts]
+turbodiffusion-serve = "turbodiffusion.serve.tui:main"
+
+[project.optional-dependencies]
+h3 = [
+  "torch==2.11.0",
+  "transformers>=4.57.0,<5",
+  "diffusers==0.38.0",
+  "safetensors>=0.4.0",
+  "accelerate>=1.0.0",
+  "tqdm>=4.66.0",
+  "einops>=0.8.0",
+]
+
+[tool.setuptools.package-data]
+"turbodiffusion.h3" = ["NOTICE"]
+
+[project.urls]
+Homepage = "https://github.com/thu-ml/TurboDiffusion"
+Repository = "https://github.com/thu-ml/TurboDiffusion"

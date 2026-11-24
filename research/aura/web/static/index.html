@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#101419">
+  <title>Tiger Eye Avatar</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%2366e7ca'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23101419'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" aria-label="Tiger Eye Avatar home"><span class="brand-mark" aria-hidden="true"></span>TIGER EYE <span class="brand-divider"></span><span class="brand-sub">AVATAR</span></a>
+  <div class="connection"><span id="connection-dot" class="dot"></span><span id="connection">Connecting to local GPU</span></div>
+</header>
+<main>
+  <div class="intro"><div><p class="eyebrow">AUDIO-DRIVEN AVATARS</p><h1>Give your voice a face.</h1><p class="subtitle">Choose a portrait. Add your voice or an audio file. Watch it come to life.</p></div><span class="local-label">LOCAL DEMO</span></div>
+  <div class="workspace">
+    <aside class="panel setup" aria-label="Stream settings">
+      <div class="section-title"><h2>Your avatar</h2><span>01</span></div>
+      <label class="portrait-upload" id="dropzone" for="portrait-input">
+        <img id="portrait-preview" src="/sample/portrait.jpg" alt="Selected avatar portrait">
+        <span class="upload-overlay"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M4 15v5h16v-5"/></svg>Change portrait</span>
+      </label>
+      <input id="portrait-input" type="file" accept="image/png,image/jpeg,image/webp" class="visually-hidden">
+      <div class="portrait-meta"><span id="portrait-name">Sample portrait</span><button id="reset-portrait" class="text-button" type="button">Reset</button></div>
+      <p class="helper">Use a clear portrait with the face in view.<br>PNG, JPG or WebP · up to 10 MB</p>
+      <div class="section-title model-heading"><h2>Choose a model</h2><span>02</span></div>
+      <fieldset class="models"><legend class="visually-hidden">Avatar model</legend>
+        <label class="model-option"><input type="radio" name="model" value="aura-1.3b" checked><span class="radio-indicator"></span><span><strong>1.3B <em>FASTER</em></strong><small>16 fps output · lower latency</small></span></label>
+        <label class="model-option"><input type="radio" name="model" value="aura-5b"><span class="radio-indicator"></span><span><strong>5B</strong><small>25 fps output · more detail</small></span></label>
+      </fieldset>
+      <details class="advanced"><summary>Performance options</summary><label class="check-label"><input id="compile" type="checkbox">Compile 1.3B for faster generation</label><p class="helper" id="compile-help">First-use compilation can take several minutes. Off by default.</p><button id="unload" class="secondary small" type="button">Release GPU memory</button></details>
+      <div class="input-section"><div class="section-title"><h2>Voice input</h2><span>03</span></div><p class="helper">Use your microphone or upload speech audio. The avatar video plays with its voice in sync. Headphones help reduce echo.</p>
+        <button id="start" class="primary" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M6 10v2a6 6 0 0 0 12 0v-2m-6 8v3m-3 0h6"/></svg><span>Start microphone</span></button>
+        <div class="mic-check">
+          <button id="mic-test" class="secondary" type="button">Test microphone</button>
+          <p id="mic-test-status" class="helper" role="status">Record up to 5 seconds, then play it back to check your microphone.</p>
+          <meter id="mic-test-level" min="0" max="1" value="0" aria-label="Microphone test input level" hidden></meter>
+          <audio id="mic-test-playback" controls preload="metadata" aria-label="Microphone test recording" hidden></audio>
+        </div>
+        <div class="audio-upload"><label for="audio-input">Upload audio</label><input id="audio-input" type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac,.webm"><p id="audio-name" class="helper" role="status">WAV, MP3 or other browser-supported audio · up to 50 MB</p><button id="audio-start" class="secondary" type="button" disabled>Stream audio file</button></div>
+        <button id="sample" class="secondary" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 10 7-10 7Z"/></svg>Try sample audio</button>
+        <div id="stop-controls" class="stop-controls" hidden><button id="finish" class="primary finish" type="button"><span class="stop-icon"></span>Finish stream</button><button id="cancel" class="secondary small" type="button">Cancel</button></div>
+      </div>
+      <p class="privacy"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6Z"/><path d="m8 12 3 3 5-6"/></svg>Audio and portraits stay on this machine.</p>
+    </aside>
+    <section class="stage-column" aria-label="Live avatar output">
+      <div class="panel stage-panel">
+        <div class="stage-toolbar"><div class="stage-title"><span class="dot" id="stream-dot"></span><span id="stream-state" role="status" aria-live="polite">Ready to create</span></div><span class="ai-label">AI-GENERATED VIDEO</span></div>
+        <div class="stage" id="stage">
+          <div id="placeholder" class="placeholder"><div class="portrait-halo"><img id="stage-portrait" src="/sample/portrait.jpg" alt="Avatar preview"></div><h2>Your next conversation, animated.</h2><p>Use your microphone, upload audio or try the sample.</p></div>
+          <video id="video" autoplay playsinline controls aria-label="Generated avatar with synchronized voice" hidden></video>
+          <div id="loading" class="loading-overlay" hidden><div class="spinner"></div><strong id="loading-message">Loading model…</strong><span>Keep this tab open. Capture starts when the model is ready.</span></div>
+          <button id="play" class="play-overlay primary" type="button" hidden>Play avatar stream</button>
+          <span id="resolution" class="resolution" hidden></span>
+        </div>
+        <div class="audio-strip"><div class="audio-label"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9Zm12-1a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></svg><span id="capture-label">Microphone off</span></div><canvas id="waveform" width="960" height="72" aria-label="Voice input level"></canvas><span id="recording-time">00:00</span></div>
+      </div>
+      <div id="notice" class="notice"><span class="notice-icon">i</span><p>Live capture, streamed generation. On this GPU, video may trail your voice. Audio input pauses automatically when the queue is full. The generated video includes synchronized sound.</p></div>
+      <div id="error" class="error" role="alert" hidden></div>
+      <div class="metrics">
+        <div class="panel metric"><span>MODEL</span><strong id="model-label">1.3B</strong><small id="output-rate">16 fps playback</small></div>
+        <div class="panel metric"><span>GENERATION</span><strong id="generation-rate">— <i>fps</i></strong><small>Measured while rendering</small></div>
+        <div class="panel metric"><span>AUDIO QUEUE</span><strong id="queue-value">0.0 <i>sec</i></strong><div class="queue-track"><div id="queue-fill"></div></div></div>
+        <div class="panel metric"><span>GENERATED</span><strong id="generated-value">0.0 <i>sec</i></strong><small id="chunk-value">Waiting for your voice</small></div>
+      </div>
+      <div class="session-footer"><span id="session-message" role="status">Both models are ready to select. One stream uses the GPU at a time.</span><a id="download" class="download" hidden>Download video <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 16v5h14v-5"/></svg></a></div>
+    </section>
+  </div>
+  <footer>Tiger Eye Avatar <span>Portrait + voice. A new way to be present.</span></footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,2 @@
+# Install into this experiment's deps/ with --no-deps; retain the existing torch 2.8 environment.
+torchao==0.13.0

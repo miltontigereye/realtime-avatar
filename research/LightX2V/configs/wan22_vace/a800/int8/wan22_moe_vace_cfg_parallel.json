@@ -1,0 +1,25 @@
+{
+    "infer_steps": 40,
+    "self_attn_1_type": "sage_attn2",
+    "cross_attn_1_type": "sage_attn2",
+    "sample_guide_scale": [
+        3.5,
+        3.5
+    ],
+    "sample_shift": 8,
+    "enable_cfg": true,
+    "cpu_offload": true,
+    "offload_granularity": "model",
+    "t5_cpu_offload": false,
+    "vae_cpu_offload": false,
+    "boundary": 0.900,
+    "parallel": {
+        "cfg_p_size": 2
+    },
+    "dit_quantized": true,
+    "dit_quant_scheme": "int8-sgl",
+    "request_defaults": {
+        "num_frames": 81,
+        "size": [480, 832]
+    }
+}

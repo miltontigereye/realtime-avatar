@@ -1,0 +1,125 @@
+"""Global server state shared across API modules.
+
+Keeping state in a dedicated module prevents the classic '__main__ vs package
+module' duplication that occurs when api_server.py is run with ``python -m``.
+All modules that need the generator or server args should import from here.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from contextvars import ContextVar
+
+from fastvideo.api.schema import DEFAULT_MEDIA_REFERENCE_MAX_BYTES
+from fastvideo.entrypoints.openai.media_policy import MediaPolicy
+
+if TYPE_CHECKING:
+    from fastvideo.entrypoints.openai.model_catalog import ModelProfile
+    from fastvideo.api.schema import GenerationRequest
+    from fastvideo.entrypoints.openai.serving_engine import OpenAIServingEngine, ServingGenerator
+    from fastvideo.fastvideo_args import FastVideoArgs
+
+DEFAULT_OUTPUT_DIR = "outputs"
+
+_generator: ServingGenerator | None = None
+_serving_engine: OpenAIServingEngine | None = None
+_fastvideo_args: FastVideoArgs | None = None
+_output_dir: str = DEFAULT_OUTPUT_DIR
+_served_model_name: str | None = None
+_default_request: GenerationRequest | None = None
+_media_reference_max_bytes: int = DEFAULT_MEDIA_REFERENCE_MAX_BYTES
+_media_policy: MediaPolicy = MediaPolicy()
+request_model_profile: ContextVar[ModelProfile | None] = ContextVar("fastvideo_request_model_profile", default=None)
+
+
+def _profile() -> ModelProfile | None:
+    selected = request_model_profile.get()
+    manager = getattr(_serving_engine, "model_manager", None)
+    return selected or (manager.active if manager is not None else None)
+
+
+def get_generator() -> ServingGenerator:
+    """Return the global VideoGenerator instance (set during startup)."""
+    assert _generator is not None, "Server not initialized — generator is None"
+    return _generator
+
+
+def get_serving_engine() -> OpenAIServingEngine:
+    """Return the shared model-agnostic OpenAI serving engine."""
+    assert _serving_engine is not None, "Server not initialized — serving engine is None"
+    return _serving_engine
+
+
+def get_server_args() -> FastVideoArgs:
+    """Return the global FastVideoArgs (set during startup)."""
+    assert _fastvideo_args is not None, "Server not initialized — args is None"
+    profile = _profile()
+    return profile.args if profile is not None else _fastvideo_args
+
+
+def get_output_dir() -> str:
+    """Return the configured output directory."""
+    return _output_dir
+
+
+def get_served_model_name() -> str:
+    """Return the public model id advertised by the OpenAI server."""
+    profile = _profile()
+    if profile is not None:
+        return profile.model
+    args = get_server_args()
+    if args.lora_path:
+        return args.lora_nickname
+    return _served_model_name or args.model_path
+
+
+def get_default_request() -> GenerationRequest | None:
+    """Return the ServeConfig.default_request set at startup, if any."""
+    profile = _profile()
+    return profile.config.default_request if profile is not None else _default_request
+
+
+def get_media_reference_max_bytes() -> int:
+    """Return the server's URL media-reference byte cap."""
+    return _media_reference_max_bytes
+
+
+def get_media_policy() -> MediaPolicy:
+    """Return the local-root and private-address rules for caller media references."""
+    return _media_policy
+
+
+def set_state(
+    generator: ServingGenerator,
+    serving_engine: OpenAIServingEngine,
+    fastvideo_args: FastVideoArgs,
+    output_dir: str,
+    default_request: GenerationRequest | None = None,
+    served_model_name: str | None = None,
+    media_reference_max_bytes: int = DEFAULT_MEDIA_REFERENCE_MAX_BYTES,
+    media_policy: MediaPolicy | None = None,
+) -> None:
+    """Set all server state at once (called from lifespan)."""
+    global _generator, _serving_engine, _fastvideo_args, _output_dir, _served_model_name, _default_request
+    global _media_reference_max_bytes, _media_policy
+    _generator = generator
+    _serving_engine = serving_engine
+    _fastvideo_args = fastvideo_args
+    _output_dir = output_dir
+    _served_model_name = served_model_name
+    _default_request = default_request
+    _media_reference_max_bytes = media_reference_max_bytes
+    _media_policy = media_policy or MediaPolicy()
+
+
+def clear_state() -> None:
+    """Clear server state on shutdown."""
+    global _generator, _serving_engine, _fastvideo_args, _served_model_name, _default_request
+    global _media_reference_max_bytes, _media_policy
+    _generator = None
+    _serving_engine = None
+    _fastvideo_args = None
+    _served_model_name = None
+    _default_request = None
+    _media_reference_max_bytes = DEFAULT_MEDIA_REFERENCE_MAX_BYTES
+    _media_policy = MediaPolicy()

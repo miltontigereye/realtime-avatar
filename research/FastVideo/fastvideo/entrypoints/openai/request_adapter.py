@@ -1,0 +1,810 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Translate OpenAI/vLLM-Omni requests into FastVideo's typed request API."""
+
+from __future__ import annotations
+
+import asyncio
+import math
+import os
+from typing import Any
+from urllib.parse import urlparse
+
+from fastvideo.entrypoints.openai.lora import LoraRequestError, LoraRuntime, LoraSelection
+from fastvideo.entrypoints.openai.media_policy import (
+    MediaPolicy,
+    MediaPolicyError,
+    data_url_media_type,
+    decode_data_url,
+    discard,
+    fetch_media,
+    resolve_local_media,
+)
+from fastvideo.entrypoints.openai.state import get_media_policy, get_media_reference_max_bytes
+from fastvideo.api.compat import (
+    REQUEST_BATCH_EXTRA_PASSTHROUGH_FIELDS,
+    explicit_request_updates,
+    legacy_generate_call_to_request,
+    request_to_sampling_param,
+)
+from fastvideo.api.schema import GenerationRequest
+from fastvideo.entrypoints.openai.protocol import (
+    FileImageReference,
+    FileVideoReference,
+    UrlImageReference,
+    UrlVideoReference,
+    VideoGenerationRequest,
+)
+from fastvideo.entrypoints.openai.utils import image_suffix, save_base64_image_to_path
+from fastvideo.fastvideo_args import FastVideoArgs
+from fastvideo.models.vision_utils import load_image
+from fastvideo.pipelines.basic.minimax_h3.draft_bundle import BUNDLE_MEDIA_TYPE, BUNDLE_PATH_EXTRA_KEY, BUNDLE_SUFFIX
+from fastvideo.registry import get_preset_selection
+
+
+class RequestAdaptationError(ValueError):
+    """The transport request cannot be represented by the loaded pipeline."""
+
+
+OPEN_H3_REGENERATE_2K_FAMILY = "open_h3_regenerate_2k"
+OPEN_H3_REGENERATE_2K_SIZE = (2560, 1440)
+OPEN_H3_REGENERATE_2K_NUM_FRAMES = 124
+# Batch-extra keys the server sets itself. They stay in REQUEST_BATCH_EXTRA_PASSTHROUGH_FIELDS so the in-process batch
+# API can route them, but HTTP `extra_params` must not set them: the value is a server filesystem path.
+_SERVER_OWNED_EXTRA_PARAMS = frozenset({BUNDLE_PATH_EXTRA_KEY})
+
+_MEDIA_SUFFIXES = {
+    "video": frozenset({".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm"}),
+    "audio": frozenset({".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".webm"}),
+}
+_DEFAULT_SUFFIXES = {"video": ".mp4", "audio": ".wav"}
+# Media types whose subtype is not already the file suffix; decoding probes content, so this is only a hint.
+_DATA_URL_SUFFIXES = {
+    "video/quicktime": ".mov",
+    "video/x-matroska": ".mkv",
+    "video/x-msvideo": ".avi",
+    "audio/mpeg": ".mp3",
+    "audio/mp4": ".m4a",
+    "audio/x-m4a": ".m4a",
+    "audio/wave": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/x-flac": ".flac",
+}
+
+
+def _as_list(value: Any | list[Any] | None) -> list[Any]:
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def _image_sources(request: VideoGenerationRequest) -> list[str]:
+    sources: list[str] = []
+    for reference in _as_list(request.image_reference):
+        if isinstance(reference, FileImageReference):
+            raise RequestAdaptationError("file_id image references are not supported; provide image_url instead")
+        sources.append(reference.image_url)
+    legacy_sources = [source for source in (request.input_reference, request.reference_url) if source]
+    if len(legacy_sources) > 1:
+        raise RequestAdaptationError("Provide only one of input_reference or reference_url.")
+    legacy = legacy_sources[0] if legacy_sources else None
+    if legacy is not None:
+        if sources:
+            raise RequestAdaptationError("Provide only one of input_reference/reference_url or image_reference.")
+        sources.append(legacy)
+    return sources
+
+
+def discard_materialized_media(paths: list[str]) -> None:
+    for path in paths:
+        discard(path)
+
+
+async def _download_media(source: str,
+                          target: str,
+                          *,
+                          max_bytes: int | None = None,
+                          policy: MediaPolicy | None = None) -> None:
+    try:
+        await fetch_media(source,
+                          target,
+                          max_bytes=get_media_reference_max_bytes() if max_bytes is None else max_bytes,
+                          policy=get_media_policy() if policy is None else policy)
+    except MediaPolicyError as error:
+        raise RequestAdaptationError(str(error)) from error
+
+
+def _local_media(source: str, policy: MediaPolicy) -> str:
+    try:
+        return resolve_local_media(source, policy)
+    except MediaPolicyError as error:
+        raise RequestAdaptationError(str(error)) from error
+
+
+async def _decode_data_media(source: str, target_base: str, kind: str, *, max_bytes: int | None) -> str:
+    try:
+        media_type = data_url_media_type(source)
+        if media_type.partition("/")[0] != kind:
+            raise MediaPolicyError(f"{kind.capitalize()} references need a data:{kind}/... URL, got media type "
+                                   f"{media_type or 'none'!r}.")
+        subtype_suffix = f".{media_type.partition('/')[2]}"
+        suffix = _DATA_URL_SUFFIXES.get(media_type, subtype_suffix)
+        target = f"{target_base}{suffix if suffix in _MEDIA_SUFFIXES[kind] else _DEFAULT_SUFFIXES[kind]}"
+        decoding = asyncio.ensure_future(
+            asyncio.to_thread(decode_data_url,
+                              source,
+                              target,
+                              max_bytes=get_media_reference_max_bytes() if max_bytes is None else max_bytes))
+        try:
+            await asyncio.shield(decoding)
+        except asyncio.CancelledError:
+            # The decoding thread cannot be interrupted; remove its file once it has finished writing.
+            def remove(done: asyncio.Future) -> None:
+                if not done.cancelled():
+                    done.exception()  # mark it retrieved; the request is already gone
+                discard(target)
+
+            decoding.add_done_callback(remove)
+            raise
+    except MediaPolicyError as error:
+        raise RequestAdaptationError(str(error)) from error
+    return target
+
+
+async def _materialize_media(source: str,
+                             target_base: str,
+                             kind: str,
+                             *,
+                             max_bytes: int | None = None,
+                             policy: MediaPolicy | None = None) -> tuple[str, bool]:
+    """Return a local file for a video or audio reference and whether this request created it."""
+    policy = get_media_policy() if policy is None else policy
+    source = source.strip()
+    if not source:
+        raise RequestAdaptationError(f"{kind.capitalize()} references must not be empty.")
+    # Only the scheme is lower-cased: copying a whole data: URL would double its memory.
+    if source[:8].lower().startswith(("http://", "https://")):
+        suffix = os.path.splitext(urlparse(source).path)[1].lower()
+        if suffix not in _MEDIA_SUFFIXES[kind]:
+            suffix = _DEFAULT_SUFFIXES[kind]
+        target = f"{target_base}{suffix}"
+        try:
+            await _download_media(source, target, max_bytes=max_bytes, policy=policy)
+        except RequestAdaptationError:
+            raise
+        except Exception as error:
+            raise RequestAdaptationError(f"Unable to fetch {kind} reference: {error}") from error
+        return target, True
+    if source[:5].lower() == "data:":
+        return await _decode_data_media(source, target_base, kind, max_bytes=max_bytes), True
+    return _local_media(source, policy), False
+
+
+async def _materialize_draft_bundle(source: str,
+                                    target_base: str,
+                                    *,
+                                    max_bytes: int | None = None,
+                                    policy: MediaPolicy | None = None) -> tuple[str, bool]:
+    """Return a local MiniMax-H3 draft bundle file and whether this request created it.
+
+    Accepts an http(s) URL (same media policy as other references), a ``data:application/x-fastvideo-h3-draft``
+    base64 URL, or a local ``.pt`` path under ``server.media_roots``. The file is read later with
+    ``torch.load(weights_only=True)``.
+    """
+    policy = get_media_policy() if policy is None else policy
+    source = source.strip()
+    if not source:
+        raise RequestAdaptationError("draft_bundle must not be empty.")
+    target = f"{target_base}{BUNDLE_SUFFIX}"
+    if source[:8].lower().startswith(("http://", "https://")):
+        try:
+            await _download_media(source, target, max_bytes=max_bytes, policy=policy)
+        except RequestAdaptationError:
+            raise
+        except Exception as error:
+            raise RequestAdaptationError(f"Unable to fetch draft_bundle: {error}") from error
+        return target, True
+    if source[:5].lower() == "data:":
+        try:
+            media_type = data_url_media_type(source)
+        except MediaPolicyError as error:
+            raise RequestAdaptationError(str(error)) from error
+        if media_type != BUNDLE_MEDIA_TYPE:
+            raise RequestAdaptationError(f"draft_bundle data URLs must be data:{BUNDLE_MEDIA_TYPE};base64,...")
+        limit = get_media_reference_max_bytes() if max_bytes is None else max_bytes
+        decoding = asyncio.ensure_future(asyncio.to_thread(decode_data_url, source, target, max_bytes=limit))
+        try:
+            await asyncio.shield(decoding)
+        except asyncio.CancelledError:
+            # The decoding thread cannot be interrupted; remove its file once it has finished writing.
+            def remove(done: asyncio.Future) -> None:
+                if not done.cancelled():
+                    done.exception()  # mark it retrieved; the request is already gone
+                discard(target)
+
+            decoding.add_done_callback(remove)
+            raise
+        except MediaPolicyError as error:
+            raise RequestAdaptationError(str(error)) from error
+        return target, True
+    local = _local_media(source, policy)
+    if not local.endswith(".pt"):
+        raise RequestAdaptationError("A local draft_bundle must be a .pt file.")
+    return local, False
+
+
+async def _materialize_image_url(source: str, target_base: str, *, max_bytes: int | None, policy: MediaPolicy) -> str:
+    target = f"{target_base}{image_suffix(source)}"
+    try:
+        await _download_media(source, target, max_bytes=max_bytes, policy=policy)
+    except RequestAdaptationError:
+        raise
+    except Exception as error:
+        raise RequestAdaptationError(f"Unable to fetch image reference: {error}") from error
+    return target
+
+
+async def prepare_reference_media(
+    request_id: str,
+    request: VideoGenerationRequest,
+    output_dir: str,
+    *,
+    max_bytes: int | None = None,
+    policy: MediaPolicy | None = None,
+) -> list[str]:
+    """Materialize media references and return the files created for this request."""
+    policy = get_media_policy() if policy is None else policy
+    _image_sources(request)
+    _video_sources(request)
+    uploads_dir = os.path.join(os.path.abspath(output_dir), "uploads")
+    created: list[str] = []
+
+    def track(path: str) -> str:
+        if path not in created:
+            created.append(path)
+        return path
+
+    def is_remote(source: str) -> bool:
+        return source.lower().startswith(("http://", "https://", "data:image"))
+
+    async def materialize(source: str, index: int) -> str:
+        source = source.strip()
+        if not source:
+            raise RequestAdaptationError("Image references must not be empty.")
+        target = os.path.join(uploads_dir, f"{request_id}_{index}")
+        if source.startswith("data:image"):
+            try:
+                local_path = track(await save_base64_image_to_path(source, target))
+            except Exception as error:
+                raise RequestAdaptationError(f"Unable to decode image reference: {error}") from error
+        elif source[:5].lower() == "data:":
+            raise RequestAdaptationError("Image references need a data:image/... URL.")
+        elif is_remote(source):
+            local_path = track(await _materialize_image_url(source, target, max_bytes=max_bytes, policy=policy))
+        else:
+            local_path = _local_media(source, policy)
+        try:
+            await asyncio.to_thread(load_image, local_path)
+        except Exception as error:
+            raise RequestAdaptationError(f"Unable to decode image reference: {error}") from error
+        return local_path
+
+    async def materialize_clip(source: str, name: str, kind: str) -> str:
+        local_path, created_here = await _materialize_media(source,
+                                                            os.path.join(uploads_dir, f"{request_id}_{name}"),
+                                                            kind,
+                                                            max_bytes=max_bytes,
+                                                            policy=policy)
+        return track(local_path) if created_here else local_path
+
+    try:
+        index = 0
+        for reference in _as_list(request.image_reference):
+            if isinstance(reference, UrlImageReference):
+                reference.image_url = await materialize(reference.image_url, index)
+                index += 1
+        if request.input_reference:
+            request.input_reference = await materialize(request.input_reference, index)
+            index += 1
+        elif request.input_reference == "":
+            request.input_reference = None
+        if request.reference_url:
+            request.reference_url = await materialize(request.reference_url, index)
+        elif request.reference_url == "":
+            request.reference_url = None
+
+        for index, reference in enumerate(_as_list(request.video_reference)):
+            if isinstance(reference, UrlVideoReference):
+                reference.video_url = await materialize_clip(reference.video_url, f"video_{index}", "video")
+        if request.video_path:
+            request.video_path = await materialize_clip(request.video_path, "video_path", "video")
+        if request.video_url:
+            request.video_url = await materialize_clip(request.video_url, "video_url", "video")
+        if request.continuation_video:
+            request.continuation_video = await materialize_clip(request.continuation_video, "continuation", "video")
+        for index, reference in enumerate(_as_list(request.audio_reference)):
+            reference.audio_url = await materialize_clip(reference.audio_url, f"audio_{index}", "audio")
+        if request.draft_bundle is not None:
+            local, created_here = await _materialize_draft_bundle(request.draft_bundle,
+                                                                  os.path.join(uploads_dir, f"{request_id}_draft"),
+                                                                  max_bytes=max_bytes,
+                                                                  policy=policy)
+            request.draft_bundle = track(local) if created_here else local
+    except BaseException:
+        # Includes cancellation, so a disconnected client leaves no downloaded inputs behind.
+        discard_materialized_media(created)
+        raise
+    return created
+
+
+def _video_sources(request: VideoGenerationRequest) -> list[str]:
+    sources: list[str] = []
+    for reference in _as_list(request.video_reference):
+        if isinstance(reference, FileVideoReference):
+            raise RequestAdaptationError("file_id video references are not supported; provide video_url instead")
+        sources.append(reference.video_url)
+    direct = request.video_path or request.video_url
+    if direct is not None:
+        if sources:
+            raise RequestAdaptationError("Provide only one of video_reference or video_path/video_url.")
+        sources.append(direct)
+    return sources
+
+
+def _audio_sources(request: VideoGenerationRequest) -> list[str]:
+    return [reference.audio_url for reference in _as_list(request.audio_reference)]
+
+
+def _parse_aspect_ratio(value: str) -> tuple[float, float]:
+    try:
+        width, height = value.split(":", 1)
+        result = float(width), float(height)
+    except (AttributeError, TypeError, ValueError) as error:
+        raise RequestAdaptationError(f"Invalid aspect_ratio {value!r}; expected WIDTH:HEIGHT") from error
+    if not all(math.isfinite(term) for term in result) or result[0] <= 0 or result[1] <= 0:
+        raise RequestAdaptationError(f"Invalid aspect_ratio {value!r}; both terms must be positive")
+    return result
+
+
+def _h3_canvas_for_aspect(model_family: str, aspect_width: float, aspect_height: float,
+                          short_edge: int | None) -> tuple[int, int]:
+    """``(height, width)`` of the 480p or 768p canvas for an aspect ratio (768p when short_edge is omitted)."""
+    from fastvideo.pipelines.basic.minimax_h3.packing import MINIMAX_H3_RESOLUTION_TIERS, resolve_canvas_size
+
+    tier = "768p" if short_edge is None else f"{short_edge}p"
+    if tier not in MINIMAX_H3_RESOLUTION_TIERS:
+        raise RequestAdaptationError(f"{H3_TASK_FAMILIES[model_family]} serves short_edge 480 or 768, "
+                                     f"got {short_edge}.")
+    try:
+        if model_family == "pika_h3_flex":
+            from fastvideo.pipelines.basic.pika_h3_flex.buckets import canvas_for_aspect, resolve_canvas
+
+            height, width = canvas_for_aspect((aspect_width, aspect_height), tier)
+            height, width, _, _ = resolve_canvas(height, width)
+            return height, width
+        tier_edge, tier_pixels = MINIMAX_H3_RESOLUTION_TIERS[tier]
+        return resolve_canvas_size(aspect_width, aspect_height, short_edge=tier_edge, max_pixels=tier_pixels)
+    except ValueError as error:
+        raise RequestAdaptationError(str(error)) from error
+
+
+def _apply_aspect_ratio(
+    kwargs: dict[str, Any],
+    request: VideoGenerationRequest,
+    *,
+    model_family: str | None,
+) -> None:
+    if request.aspect_ratio is None:
+        return
+    aspect_width, aspect_height = _parse_aspect_ratio(request.aspect_ratio)
+    if model_family in H3_TASK_FAMILIES:
+        height, width = _h3_canvas_for_aspect(model_family, aspect_width, aspect_height, request.short_edge)
+    elif request.short_edge is not None:
+        if aspect_width >= aspect_height:
+            height = request.short_edge
+            width = round(request.short_edge * aspect_width / aspect_height)
+        else:
+            width = request.short_edge
+            height = round(request.short_edge * aspect_height / aspect_width)
+    else:
+        return
+    kwargs["width"], kwargs["height"] = width, height
+
+
+def validate_served_model_name(
+    model: str | None,
+    args: FastVideoArgs,
+    served_model_name: str,
+) -> None:
+    """Reject a request model id that is not the one this server loaded."""
+    if model is None:
+        return
+    allowed_models = {args.lora_nickname} if args.lora_path else {served_model_name}
+    if model not in allowed_models:
+        choices = ", ".join(sorted(allowed_models))
+        raise RequestAdaptationError(f"Model mismatch: request specifies {model!r}; this server provides {choices}.")
+
+
+def validate_model_and_lora(
+    request: VideoGenerationRequest,
+    args: FastVideoArgs,
+    served_model_name: str,
+    lora_runtime: LoraRuntime | None = None,
+) -> LoraSelection | None:
+    """Validate vLLM-style model and LoRA selectors; return the per-request selection when an allow-list is set.
+
+    With a ``lora_runtime`` allow-list, ``lora.name`` must be an allow-listed id and ``lora.scale`` its strength.
+
+    FastVideo's published FastH3 adapters include dense replacement tensors in
+    addition to low-rank factors. Those tensors are applied while the model is
+    loaded and cannot be swapped safely between concurrent requests. The API
+    accepts vLLM's selector shape, but it must identify the startup adapter.
+    """
+    validate_served_model_name(request.model, args, served_model_name)
+
+    if lora_runtime is not None:
+        try:
+            return lora_runtime.resolve(request.lora)
+        except LoraRequestError as error:
+            raise RequestAdaptationError(str(error)) from error
+
+    if request.lora is None:
+        return None
+    if not args.lora_path:
+        raise RequestAdaptationError(
+            "This server has no startup LoRA. Configure generator.pipeline.components.lora_path before using "
+            "the request lora selector.")
+
+    body = request.lora
+    name = next((body[key] for key in ("name", "lora_name", "adapter") if body.get(key) is not None), None)
+    path = next((body[key] for key in ("path", "lora_path", "local_path") if body.get(key) is not None), None)
+    scale = next((body[key] for key in ("scale", "lora_scale") if body.get(key) is not None), None)
+    if name is None and path is None:
+        raise RequestAdaptationError("lora must provide a name or path")
+    if name is not None and str(name) != args.lora_nickname:
+        raise RequestAdaptationError(f"Requested LoRA {name!r} is not the startup adapter {args.lora_nickname!r}.")
+    if path is not None and str(path) != args.lora_path:
+        raise RequestAdaptationError(
+            f"Requested LoRA path {path!r} does not match the startup adapter {args.lora_path!r}.")
+    if scale is not None:
+        try:
+            scale_value = float(scale)
+        except (TypeError, ValueError) as error:
+            raise RequestAdaptationError(f"Invalid LoRA scale {scale!r}") from error
+        if not math.isclose(scale_value, args.lora_strength, rel_tol=0.0, abs_tol=1e-8):
+            raise RequestAdaptationError(
+                f"Requested LoRA scale {scale_value:g} does not match startup strength {args.lora_strength:g}.")
+    return None
+
+
+H3_TASK_FAMILIES = {"minimax_h3": "MiniMax-H3", "pika_h3_flex": "Pika H3 Flex"}
+H3_TASK_ALIASES = {"t2v": "t2va", "i2v": "i2va"}
+
+
+def is_ref2va_server(args: FastVideoArgs, model_family: str | None) -> bool:
+    """Whether a MiniMax-H3 or Pika H3 Flex server was started with its Ref2VA pipeline."""
+    return model_family in H3_TASK_FAMILIES and "ref2va" in (getattr(args, "override_pipeline_cls_name", None)
+                                                             or "").lower()
+
+
+def _check_task(task: str, model_family: str | None, ref2va: bool, *, images: list[str], media: bool) -> str:
+    if model_family not in H3_TASK_FAMILIES:
+        raise RequestAdaptationError("The task selector is only defined for MiniMax-H3 and Pika H3 Flex servers.")
+    name = H3_TASK_FAMILIES[model_family]
+    normalized = H3_TASK_ALIASES.get(task.lower(), task.lower())
+    if normalized not in {"t2va", "i2va", "l2va", "fl2va", "ref2va"}:
+        raise RequestAdaptationError(f"{name} task must be one of t2va, i2va, l2va, fl2va or ref2va.")
+    if normalized == "t2va" and media:
+        raise RequestAdaptationError(f"{name} task='t2va' does not accept reference media.")
+    if ref2va:
+        if normalized == "ref2va" or (normalized == "t2va" and model_family == "minimax_h3"):
+            return normalized
+        raise RequestAdaptationError(f"This server is configured for {name} Ref2VA, not task={normalized!r}.")
+    if normalized == "ref2va":
+        raise RequestAdaptationError(f"{name} task='ref2va' requires its Ref2VA pipeline at server startup.")
+    if normalized in ("i2va", "l2va") and len(images) != 1:
+        frame = "first" if normalized == "i2va" else "last"
+        raise RequestAdaptationError(
+            f"{name} task={normalized!r} requires exactly one image reference (the {frame} frame).")
+    if normalized == "fl2va" and not images:
+        raise RequestAdaptationError(f"{name} task='fl2va' requires one or two image references.")
+    return normalized
+
+
+def _apply_reference_inputs(
+    kwargs: dict[str, Any],
+    request: VideoGenerationRequest,
+    args: FastVideoArgs,
+    *,
+    model_family: str | None,
+) -> None:
+    images = _image_sources(request)
+    videos = _video_sources(request)
+    audios = _audio_sources(request)
+    ref2va = is_ref2va_server(args, model_family)
+    if request.task is not None:
+        task = _check_task(request.task, model_family, ref2va, images=images, media=bool(images or videos or audios))
+    else:
+        task = None
+
+    if request.draft_bundle is not None and model_family != OPEN_H3_REGENERATE_2K_FAMILY:
+        raise RequestAdaptationError("draft_bundle is only accepted by Open-H3-Regenerate-2K servers.")
+
+    if ref2va:
+        from fastvideo.pipelines.basic.minimax_h3 import MiniMaxH3Reference
+        from fastvideo.pipelines.basic.minimax_h3.reference import validate_references
+
+        references = [MiniMaxH3Reference(source=source, media_type="image") for source in images]
+        references.extend(MiniMaxH3Reference(source=source, media_type="video") for source in videos)
+        references.extend(MiniMaxH3Reference(source=source, media_type="audio") for source in audios)
+        if request.continuation_video:
+            if model_family == "pika_h3_flex":
+                raise RequestAdaptationError("Pika H3 Flex Ref2VA does not accept a continuation_video.")
+            references.append(MiniMaxH3Reference(source=request.continuation_video, media_type="continuation"))
+        if not references and model_family == "pika_h3_flex":
+            raise RequestAdaptationError("Pika H3 Flex Ref2VA requires at least one image or video reference; "
+                                         "serve the FL2VA model for text-only generation.")
+        if references:
+            try:
+                kwargs["references"] = validate_references(references)
+            except (TypeError, ValueError) as error:
+                raise RequestAdaptationError(str(error)) from error
+        return
+
+    if request.continuation_video:
+        raise RequestAdaptationError("continuation_video requires a MiniMax-H3 server configured with "
+                                     "override_pipeline_cls_name=MiniMaxH3Ref2VAModularPipeline.")
+
+    if model_family == OPEN_H3_REGENERATE_2K_FAMILY:
+        if request.draft_bundle is not None:
+            if videos or images or audios:
+                raise RequestAdaptationError("Open-H3-Regenerate-2K takes either draft_bundle or one video_reference, "
+                                             "not both, and no image or audio references.")
+            kwargs["video_path"] = request.draft_bundle
+            return
+        if len(videos) != 1 or images or audios:
+            raise RequestAdaptationError("Open-H3-Regenerate-2K takes exactly one video_reference (the 768P draft) "
+                                         "and no image or audio references.")
+        kwargs["video_path"] = videos[0]
+        return
+
+    if model_family in H3_TASK_FAMILIES and (videos or audios):
+        raise RequestAdaptationError(f"{H3_TASK_FAMILIES[model_family]} video/audio references require a server "
+                                     "configured with its Ref2VA pipeline (override_pipeline_cls_name).")
+    if len(images) > 2:
+        raise RequestAdaptationError("The loaded pipeline accepts at most first and last image references.")
+    if task == "l2va":
+        kwargs["last_image"] = load_image(images[0])
+    elif images:
+        kwargs["image_path"] = images[0]
+    if len(images) == 2:
+        kwargs["last_image"] = load_image(images[1])
+    if len(videos) > 1:
+        raise RequestAdaptationError("The loaded pipeline accepts at most one video reference.")
+    if videos:
+        kwargs["video_path"] = videos[0]
+    if audios:
+        raise RequestAdaptationError("The loaded pipeline does not accept audio reference inputs.")
+
+
+def _validate_pika_geometry(kwargs: dict[str, Any], width: int | None, height: int | None, *,
+                            frames_explicit: bool) -> None:
+    """Reject at admission what Pika H3 Flex would reject in its pipeline, and report the bucket it renders."""
+    from fastvideo.pipelines.basic.pika_h3_flex.buckets import resolve_canvas, resolve_frames
+
+    if kwargs["fps"] != 24:
+        raise RequestAdaptationError(f"Pika H3 Flex requires fps=24, got {kwargs['fps']}.")
+    requested_num_frames = kwargs.get("num_frames")
+    try:
+        if width is not None or height is not None:
+            snapped_height, snapped_width, _, _ = resolve_canvas(height, width)
+            kwargs["width"], kwargs["height"] = snapped_width, snapped_height
+        aligned_num_frames = None if requested_num_frames is None else resolve_frames(requested_num_frames)
+    except (TypeError, ValueError) as error:
+        raise RequestAdaptationError(str(error)) from error
+    if aligned_num_frames is None:
+        return
+    if frames_explicit and aligned_num_frames != requested_num_frames:
+        raise RequestAdaptationError("Pika H3 Flex num_frames must be on the causal-VAE grid (17 * n + 5); "
+                                     f"got {requested_num_frames}, next valid value is {aligned_num_frames}.")
+    kwargs["num_frames"] = aligned_num_frames
+
+
+def build_generation_request(
+    request_id: str,
+    request: VideoGenerationRequest,
+    args: FastVideoArgs,
+    *,
+    served_model_name: str,
+    output_dir: str,
+    default_request: GenerationRequest | None = None,
+    lora_runtime: LoraRuntime | None = None,
+) -> GenerationRequest:
+    """Build one tracked FastVideo request using explicit-field precedence."""
+    validate_model_and_lora(request, args, served_model_name, lora_runtime)
+    workload_type = getattr(args, "workload_type", "")
+    workload_value = str(getattr(workload_type, "value", workload_type) or "")
+    is_audio = workload_value.endswith("2a")
+    kwargs: dict[str, Any] = {}
+    if default_request is not None:
+        kwargs.update(explicit_request_updates(default_request))
+
+    body_set = request.model_fields_set
+    nested_set = request.video_params.model_fields_set if request.video_params is not None else set()
+    if "size" in body_set and request.size is not None:
+        width, height = request.size.split("x", 1)
+        kwargs["width"], kwargs["height"] = int(width), int(height)
+    else:
+        if "width" in body_set and request.width is not None:
+            kwargs["width"] = request.width
+        elif "video_params" in body_set and "width" in nested_set and request.video_params.width is not None:
+            kwargs["width"] = request.video_params.width
+        if "height" in body_set and request.height is not None:
+            kwargs["height"] = request.height
+        elif "video_params" in body_set and "height" in nested_set and request.video_params.height is not None:
+            kwargs["height"] = request.video_params.height
+
+    fps_explicit = ("fps" in body_set
+                    and request.fps is not None) or ("video_params" in body_set and "fps" in nested_set
+                                                     and request.video_params.fps is not None)
+    if fps_explicit:
+        fps = request.fps if "fps" in body_set else request.video_params.fps
+        if fps is not None:
+            kwargs["fps"] = fps
+    kwargs.setdefault("fps", 24)
+
+    frames_explicit = ("num_frames" in body_set
+                       and request.num_frames is not None) or ("video_params" in body_set and "num_frames" in nested_set
+                                                               and request.video_params.num_frames is not None)
+    if frames_explicit:
+        num_frames = request.num_frames if "num_frames" in body_set else request.video_params.num_frames
+        if num_frames is not None:
+            kwargs["num_frames"] = num_frames
+    elif not is_audio and "seconds" in body_set and request.seconds is not None:
+        kwargs["num_frames"] = int(request.seconds) * int(kwargs["fps"])
+
+    direct_fields = (
+        "seed",
+        "num_inference_steps",
+        "guidance_scale",
+        "guidance_scale_2",
+        "true_cfg_scale",
+        "negative_prompt",
+        "enable_teacache",
+        "max_sequence_length",
+        "boundary_ratio",
+        "audio_start_in_s",
+        "audio_end_in_s",
+    )
+    for name in direct_fields:
+        if name in body_set:
+            value = getattr(request, name)
+            if value is not None:
+                kwargs[name] = value
+    if is_audio and "seconds" in body_set and request.seconds is not None and "audio_end_in_s" not in body_set:
+        start = float(kwargs.get("audio_start_in_s") or 0.0)
+        kwargs["audio_start_in_s"] = start
+        kwargs["audio_end_in_s"] = start + float(int(request.seconds))
+    if is_audio:
+        if {"size", "width", "height", "video_params"} & body_set:
+            raise RequestAdaptationError("Audio generation does not accept size, width, height, or video_params.")
+        start = float(kwargs.get("audio_start_in_s") or 0.0)
+        end = kwargs.get("audio_end_in_s")
+        if end is not None and float(end) <= start:
+            raise RequestAdaptationError(f"audio_end_in_s ({end}) must be greater than audio_start_in_s ({start}).")
+    if "n" in body_set or "num_outputs_per_prompt" in body_set:
+        kwargs["num_videos_per_prompt"] = request.resolved_num_outputs
+
+    try:
+        _, model_family = get_preset_selection(args.model_path)
+    except (RuntimeError, ValueError):
+        model_family = None
+    if request.resolved_num_outputs != 1:
+        raise RequestAdaptationError("FastVideo serving currently supports exactly one video output per request.")
+    if "short_edge" in body_set and request.short_edge is not None and request.aspect_ratio is None:
+        raise RequestAdaptationError("short_edge requires aspect_ratio.")
+    _apply_aspect_ratio(kwargs, request, model_family=model_family)
+    _apply_reference_inputs(kwargs, request, args, model_family=model_family)
+    if model_family == "mmaudio" and not workload_value.endswith("t2a") and not kwargs.get("video_path"):
+        raise RequestAdaptationError("MMAudio video-to-audio generation requires video_reference or video_path.")
+
+    extension_fields = ("flow_shift", "sound_duration", "start_time_seconds")
+    for name in extension_fields:
+        if name in body_set and getattr(request, name) is not None:
+            kwargs[name] = getattr(request, name)
+    if "generate_sound" in body_set and request.generate_sound and model_family != "minimax_h3":
+        kwargs["generate_sound"] = True
+    if "enable_frame_interpolation" in body_set and request.enable_frame_interpolation:
+        kwargs["enable_frame_interpolation"] = True
+        for name in (
+                "frame_interpolation_exp",
+                "frame_interpolation_scale",
+                "frame_interpolation_model_path",
+        ):
+            kwargs[name] = getattr(request, name)
+    if request.extra_params:
+        unknown_extra_params = sorted(set(request.extra_params) - set(REQUEST_BATCH_EXTRA_PASSTHROUGH_FIELDS))
+        if unknown_extra_params:
+            raise RequestAdaptationError("Unsupported extra_params fields: " + ", ".join(unknown_extra_params))
+        server_owned = sorted(set(request.extra_params) & _SERVER_OWNED_EXTRA_PARAMS)
+        if server_owned:
+            raise RequestAdaptationError("extra_params may not set server-owned fields: " + ", ".join(server_owned))
+        kwargs.update(request.extra_params)
+
+    width = kwargs.get("width")
+    height = kwargs.get("height")
+    if width is not None and (not isinstance(width, int) or width <= 0):
+        raise RequestAdaptationError(f"width must be a positive integer, got {width!r}")
+    if height is not None and (not isinstance(height, int) or height <= 0):
+        raise RequestAdaptationError(f"height must be a positive integer, got {height!r}")
+
+    if model_family == OPEN_H3_REGENERATE_2K_FAMILY:
+        if (width, height) not in ((None, None), OPEN_H3_REGENERATE_2K_SIZE):
+            raise RequestAdaptationError("Open-H3-Regenerate-2K always renders 2560x1440; omit size/width/height "
+                                         f"or pass 2560x1440, got {width}x{height}.")
+        if kwargs.get("num_frames", OPEN_H3_REGENERATE_2K_NUM_FRAMES) != OPEN_H3_REGENERATE_2K_NUM_FRAMES:
+            raise RequestAdaptationError("Open-H3-Regenerate-2K regenerates the draft's first 121 frames (24 fps); "
+                                         "omit seconds and num_frames.")
+        if kwargs["fps"] != 24:
+            raise RequestAdaptationError(f"Open-H3-Regenerate-2K requires fps=24, got {kwargs['fps']}.")
+
+    if model_family == "minimax_h3":
+        from fastvideo.pipelines.basic.minimax_h3.packing import (
+            MINIMAX_H3_CANVAS_MULTIPLE,
+            MINIMAX_H3_MAX_PIXELS,
+        )
+        from fastvideo.pipelines.basic.minimax_h3.stages.minimax_h3_input_preparation import (
+            resolve_target_num_frames, )
+
+        if kwargs["fps"] != 24:
+            raise RequestAdaptationError(f"MiniMax-H3 requires fps=24, got {kwargs['fps']}.")
+        if width is None or height is None:
+            raise RequestAdaptationError("MiniMax-H3 requires both width and height.")
+        if width % MINIMAX_H3_CANVAS_MULTIPLE or height % MINIMAX_H3_CANVAS_MULTIPLE:
+            raise RequestAdaptationError("MiniMax-H3 width and height must be positive multiples of "
+                                         f"{MINIMAX_H3_CANVAS_MULTIPLE}, got {width}x{height}.")
+        if width * height > MINIMAX_H3_MAX_PIXELS:
+            raise RequestAdaptationError(
+                f"MiniMax-H3 canvas exceeds the {MINIMAX_H3_MAX_PIXELS}-pixel limit: {width}x{height}.")
+        try:
+            requested_num_frames = kwargs.get("num_frames")
+            aligned_num_frames = resolve_target_num_frames(requested_num_frames)
+        except (TypeError, ValueError) as error:
+            raise RequestAdaptationError(str(error)) from error
+        if frames_explicit and aligned_num_frames != requested_num_frames:
+            raise RequestAdaptationError("MiniMax-H3 num_frames must be on the causal-VAE grid (17 * n + 5); "
+                                         f"got {requested_num_frames}, next valid value is {aligned_num_frames}.")
+        kwargs["num_frames"] = aligned_num_frames
+
+    if model_family == "pika_h3_flex":
+        _validate_pika_geometry(kwargs, width, height, frames_explicit=frames_explicit)
+
+    media_dir = "audio" if is_audio else "videos"
+    extension = ".wav" if is_audio else ".mp4"
+    output_path = os.path.join(os.path.abspath(output_dir), media_dir, f"{request_id}{extension}")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    if request.return_draft_bundle:
+        if model_family != "minimax_h3":
+            raise RequestAdaptationError("return_draft_bundle is only supported by MiniMax-H3 servers.")
+        kwargs[BUNDLE_PATH_EXTRA_KEY] = os.path.join(os.path.dirname(output_path), f"{request_id}{BUNDLE_SUFFIX}")
+    kwargs.update({
+        "output_path": output_path,
+        "save_video": True,
+        "return_frames": False,
+    })
+    generation_request = legacy_generate_call_to_request(request.prompt, None, legacy_kwargs=kwargs)
+    try:
+        # Resolve once at admission time so unsupported model-specific fields
+        # are a deterministic 400, rather than an asynchronous failed job.
+        request_to_sampling_param(generation_request, model_path=args.model_path)
+    except (TypeError, ValueError) as error:
+        raise RequestAdaptationError(str(error)) from error
+    return generation_request
+
+
+__all__ = [
+    "RequestAdaptationError",
+    "build_generation_request",
+    "prepare_reference_media",
+    "validate_model_and_lora",
+    "validate_served_model_name",
+]

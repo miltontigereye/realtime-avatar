@@ -1,0 +1,26 @@
+{
+    "model_cls": "worldplay_bi",
+    "task": "i2v",
+    "infer_steps": 50,
+    "transformer_model_name": "480p_i2v",
+    "action_ckpt": "/path/to/HY-WorldPlay/bidirectional_model/diffusion_pytorch_model.safetensors",
+    "vae_stride": [4, 16, 16],
+    "sample_shift": 7.0,
+    "sample_guide_scale": 6.0,
+    "enable_cfg": true,
+    "attn_type": "flash_attn2",
+    "chunk_latent_frames": 16,
+    "memory_frames": 20,
+    "temporal_context_size": 12,
+    "stabilization_level": 15,
+    "use_prope": true,
+    "feature_caching": "NoCaching",
+    "cpu_offload": true,
+    "offload_granularity": "block",
+    "use_image_encoder": true,
+    "use_bi_model_as_main": true,
+    "parallel": {},
+    "request_defaults": {
+        "num_frames": 125
+    }
+}
