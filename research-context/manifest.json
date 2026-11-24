@@ -1,0 +1,534 @@
+{
+  "date": "2026-11-24",
+  "purpose": "Minimum method-reading source snapshots, not complete runnable upstream checkouts.",
+  "projects": {
+    "FastVideo": {
+      "purpose": "Sparse/linear attention, causal KV state, attention quantization training",
+      "revision": "c938a8aa2b856a594f791a61875ba0bdac5ef318",
+      "upstream": "https://github.com/hao-ai-lab/FastVideo.git",
+      "files": [
+        "sources/FastVideo/fastvideo/attention/backends/video_sparse_attn.py",
+        "sources/FastVideo/fastvideo/attention/backends/sla.py",
+        "sources/FastVideo/fastvideo/attention/backends/attn_qat_train.py",
+        "sources/FastVideo/fastvideo/attention/backends/attn_qat_infer.py",
+        "sources/FastVideo/fastvideo/attention/backends/abstract.py",
+        "sources/FastVideo/fastvideo/models/wan/causal_transformer.py",
+        "sources/FastVideo/fastvideo/pipelines/basic/wan/stages/causal_denoising.py",
+        "sources/FastVideo/fastvideo-kernel/python/fastvideo_kernel/triton_kernels/sla_triton.py",
+        "sources/FastVideo/docs/training/attn_qat.md",
+        "sources/FastVideo/README.md",
+        "sources/FastVideo/LICENSE"
+      ]
+    },
+    "LightX2V": {
+      "purpose": "TeaCache/MagCache feature reuse, rolling KV cache, lightweight decoder",
+      "revision": "e574493231fc019abe70f6e7727902ea45e59474",
+      "upstream": "https://github.com/ModelTC/LightX2V.git",
+      "files": [
+        "sources/LightX2V/lightx2v/models/networks/wan/infer/feature_caching/transformer_infer.py",
+        "sources/LightX2V/lightx2v/models/schedulers/wan/feature_caching/scheduler.py",
+        "sources/LightX2V/lightx2v/common/transformer_infer/transformer_infer.py",
+        "sources/LightX2V/lightx2v/common/kvcache/base.py",
+        "sources/LightX2V/lightx2v/common/kvcache/rolling.py",
+        "sources/LightX2V/lightx2v/common/kvcache/layout.py",
+        "sources/LightX2V/lightx2v/models/video_encoders/hf/tae.py",
+        "sources/LightX2V/configs/caching/teacache/wan_t2v_1_3b_tea_480p.json",
+        "sources/LightX2V/configs/caching/magcache/wan_t2v_mag_1_3b.json",
+        "sources/LightX2V/README.md",
+        "sources/LightX2V/LICENSE"
+      ]
+    },
+    "Self-Forcing": {
+      "purpose": "Causal chunk generation, cache use and self-forcing training algorithm",
+      "revision": "33593df3e81fa3ec10239271dd2c100facac6de1",
+      "upstream": "https://github.com/guandeh17/Self-Forcing.git",
+      "files": [
+        "sources/Self-Forcing/pipeline/causal_inference.py",
+        "sources/Self-Forcing/pipeline/self_forcing_training.py",
+        "sources/Self-Forcing/pipeline/causal_diffusion_inference.py",
+        "sources/Self-Forcing/wan/modules/causal_model.py",
+        "sources/Self-Forcing/wan/modules/attention.py",
+        "sources/Self-Forcing/utils/scheduler.py",
+        "sources/Self-Forcing/configs/self_forcing_dmd.yaml",
+        "sources/Self-Forcing/README.md",
+        "sources/Self-Forcing/LICENSE"
+      ]
+    },
+    "SparkDiffusion": {
+      "purpose": "Framework overview; algorithm implementation is in the adjacent sparkdiffusion directory",
+      "revision": "3fd210c7baaf6ad233ce4c730d0e329bb8014b6b",
+      "upstream": "https://github.com/AlibabaResearch/SparkDiffusion.git",
+      "files": [
+        "sources/SparkDiffusion/examples/custom_sparse_attn/my_attention.py",
+        "sources/SparkDiffusion/README.md",
+        "sources/SparkDiffusion/LICENSE.txt"
+      ]
+    },
+    "sparkdiffusion": {
+      "purpose": "RoLa sparse/low-rank attention, CrossDistill objective and fused operators",
+      "revision": null,
+      "upstream": null,
+      "files": [
+        "sources/sparkdiffusion/LICENSE.txt",
+        "sources/sparkdiffusion/networks/wan_rola_attention.py",
+        "sources/sparkdiffusion/networks/sparse_attn_registry.py",
+        "sources/sparkdiffusion/networks/wan2pt1.py",
+        "sources/sparkdiffusion/models/t2v_model_distill.py",
+        "sources/sparkdiffusion/models/t2v_model_finetune.py",
+        "sources/sparkdiffusion/samplers/euler.py",
+        "sources/sparkdiffusion/ops/fused_kernel/fused_lowrank.py",
+        "sources/sparkdiffusion/ops/fused_kernel/fused_sparse_attn.py",
+        "sources/sparkdiffusion/configs/defaults/model.py",
+        "sources/sparkdiffusion/configs/defaults/net.py"
+      ],
+      "note": "Adjacent source package tracked logically under SparkDiffusion/sparkdiffusion; per-file hashes identify the physical working copy."
+    },
+    "TurboDiffusion": {
+      "purpose": "Sparse-linear attention replacement, rCM distillation and low-bit operators",
+      "revision": "0c189a2c1dd57d1d5fa8ef74d2e5caee5ed85f05",
+      "upstream": "https://github.com/thu-ml/TurboDiffusion.git",
+      "files": [
+        "sources/TurboDiffusion/turbodiffusion/inference/modify_model.py",
+        "sources/TurboDiffusion/turbodiffusion/rcm/models/t2v_model_distill_rcm.py",
+        "sources/TurboDiffusion/turbodiffusion/rcm/samplers/euler.py",
+        "sources/TurboDiffusion/turbodiffusion/rcm/networks/wan2pt1.py",
+        "sources/TurboDiffusion/turbodiffusion/ops/core.py",
+        "sources/TurboDiffusion/turbodiffusion/ops/quant/quant.cu",
+        "sources/TurboDiffusion/.gitmodules",
+        "sources/TurboDiffusion/README.md",
+        "sources/TurboDiffusion/LICENSE"
+      ]
+    },
+    "UnStep": {
+      "purpose": "Reduced denoising schedules, attention projection SVD and local/sink attention",
+      "revision": "69ac6ddb90f6e9e6f3a83d2b1f570492ad122a75",
+      "upstream": "https://github.com/facebookresearch/UnStep.git",
+      "files": [
+        "sources/UnStep/unstep/wrapper.py",
+        "sources/UnStep/unstep/wrapper_runtime.py",
+        "sources/UnStep/unstep/clean_sigma.py",
+        "sources/UnStep/THIRD_PARTY_NOTICES.md",
+        "sources/UnStep/README.md",
+        "sources/UnStep/LICENSE"
+      ]
+    },
+    "AURA-deployed": {
+      "purpose": "Measured baseline: actual compiled AURA pipeline, invariant conditioning, causal audio/KV cache and streaming LightTAE adapter.",
+      "revision": "c06aa7dc8b850405273345089da521454ffd607e",
+      "note": "Modified runtime snapshot, not a pristine upstream revision; hashes and the frozen source archive identify executed content.",
+      "files": [
+        "sources/AURA-deployed/aura/configs.py",
+        "sources/AURA-deployed/aura/model.py",
+        "sources/AURA-deployed/aura/pipeline.py",
+        "sources/AURA-deployed/aura/kv_cache.py",
+        "sources/AURA-deployed/aura/audio.py",
+        "sources/AURA-deployed/aura/streaming_audio.py",
+        "sources/AURA-deployed/serve_optimized.py",
+        "sources/AURA-deployed/rope_variants.py",
+        "sources/AURA-deployed/taehv_decoder.py",
+        "sources/AURA-deployed/check_correctness.py",
+        "sources/AURA-deployed/research_kernels/taehv-011dfc2/taehv.py",
+        "sources/AURA-deployed/research_kernels/taehv-011dfc2/LICENSE",
+        "sources/AURA-deployed/README.md",
+        "sources/AURA-deployed/LICENSE.txt"
+      ]
+    }
+  },
+  "files": {
+    "sources/FastVideo/fastvideo/attention/backends/video_sparse_attn.py": {
+      "source": "research/FastVideo/fastvideo/attention/backends/video_sparse_attn.py",
+      "bytes": 17392,
+      "sha256": "6f05e429129bb131532f42e24aa868bd7752f6600bc958ea66934b6390157fc2"
+    },
+    "sources/FastVideo/fastvideo/attention/backends/sla.py": {
+      "source": "research/FastVideo/fastvideo/attention/backends/sla.py",
+      "bytes": 19889,
+      "sha256": "c7a6ef77bedb9c6a86b6474176d1cb93502f4cfe77ab0ef4b53f0a30a91c7536"
+    },
+    "sources/FastVideo/fastvideo/attention/backends/attn_qat_train.py": {
+      "source": "research/FastVideo/fastvideo/attention/backends/attn_qat_train.py",
+      "bytes": 5110,
+      "sha256": "dbd5084fa943ec530ad3b273c384dc8ac42b652a3ed153888a5c98c031459fab"
+    },
+    "sources/FastVideo/fastvideo/attention/backends/attn_qat_infer.py": {
+      "source": "research/FastVideo/fastvideo/attention/backends/attn_qat_infer.py",
+      "bytes": 15847,
+      "sha256": "e38cf82b81a7025f4e0e5bdabcfdccd0dcc79ad4ac0f684f0385037620968d6b"
+    },
+    "sources/FastVideo/fastvideo/attention/backends/abstract.py": {
+      "source": "research/FastVideo/fastvideo/attention/backends/abstract.py",
+      "bytes": 10990,
+      "sha256": "2a738821b0505b658f7b722ab217fe6ddd0d326329235b4bc390ae90317c880c"
+    },
+    "sources/FastVideo/fastvideo/models/wan/causal_transformer.py": {
+      "source": "research/FastVideo/fastvideo/models/wan/causal_transformer.py",
+      "bytes": 45077,
+      "sha256": "eb6d28e3ad386c6682f08fbb274d7704347f10aa7d5fdd474d18943c0d2436e4"
+    },
+    "sources/FastVideo/fastvideo/pipelines/basic/wan/stages/causal_denoising.py": {
+      "source": "research/FastVideo/fastvideo/pipelines/basic/wan/stages/causal_denoising.py",
+      "bytes": 28604,
+      "sha256": "c70afe27569af96cecb8810cfa72edff31ef456804b642dcd6c82365de166adf"
+    },
+    "sources/FastVideo/fastvideo-kernel/python/fastvideo_kernel/triton_kernels/sla_triton.py": {
+      "source": "research/FastVideo/fastvideo-kernel/python/fastvideo_kernel/triton_kernels/sla_triton.py",
+      "bytes": 11444,
+      "sha256": "9319bafe3b73f5b49fc27802951e7f31fa8da2d8b498658b041ddfb5567b394c"
+    },
+    "sources/FastVideo/docs/training/attn_qat.md": {
+      "source": "research/FastVideo/docs/training/attn_qat.md",
+      "bytes": 6828,
+      "sha256": "a12ce633fc26f76eba2648371c4fe9c0ff7f95fc6e65f717d28ed44b9f713088"
+    },
+    "sources/FastVideo/README.md": {
+      "source": "research/FastVideo/README.md",
+      "bytes": 12362,
+      "sha256": "e5d2f32b1d64a5d68a9102a8eb8b12e0a8f3ab1c253e958aa838eda848095411"
+    },
+    "sources/FastVideo/LICENSE": {
+      "source": "research/FastVideo/LICENSE",
+      "bytes": 10757,
+      "sha256": "5c7f173199fd7fb3cc83d86d24f3541e8ae0cb8c16e912ca519ed6a1435bd8f3"
+    },
+    "sources/LightX2V/lightx2v/models/networks/wan/infer/feature_caching/transformer_infer.py": {
+      "source": "research/LightX2V/lightx2v/models/networks/wan/infer/feature_caching/transformer_infer.py",
+      "bytes": 48155,
+      "sha256": "02883c94544966cab16d8b0a05d0d0cae49014d451db8b7187a0a0fa704f4cdf"
+    },
+    "sources/LightX2V/lightx2v/models/schedulers/wan/feature_caching/scheduler.py": {
+      "source": "research/LightX2V/lightx2v/models/schedulers/wan/feature_caching/scheduler.py",
+      "bytes": 623,
+      "sha256": "6d7e57b3e10ea104fda1a34c1684fdf4e0ed49fc2755c9c00041018534f999c2"
+    },
+    "sources/LightX2V/lightx2v/common/transformer_infer/transformer_infer.py": {
+      "source": "research/LightX2V/lightx2v/common/transformer_infer/transformer_infer.py",
+      "bytes": 3328,
+      "sha256": "32dae111a0cf03d16da2efefd740f0150967d9b8c613b42b9292604da11c1cde"
+    },
+    "sources/LightX2V/lightx2v/common/kvcache/base.py": {
+      "source": "research/LightX2V/lightx2v/common/kvcache/base.py",
+      "bytes": 3901,
+      "sha256": "985d0c640bbb45874c4501273535fe0d3767ac0c12fdf51001ed6f0bce743139"
+    },
+    "sources/LightX2V/lightx2v/common/kvcache/rolling.py": {
+      "source": "research/LightX2V/lightx2v/common/kvcache/rolling.py",
+      "bytes": 16749,
+      "sha256": "02cd319fe9fe5c697217f438e1f0e2cbd685ebc49b602d3845e1325399bcf0a3"
+    },
+    "sources/LightX2V/lightx2v/common/kvcache/layout.py": {
+      "source": "research/LightX2V/lightx2v/common/kvcache/layout.py",
+      "bytes": 3535,
+      "sha256": "e2e21ca3eb468c1a4099744abd8b83c8e2c1d5a714b596587b51a4e1fffe62b2"
+    },
+    "sources/LightX2V/lightx2v/models/video_encoders/hf/tae.py": {
+      "source": "research/LightX2V/lightx2v/models/video_encoders/hf/tae.py",
+      "bytes": 14266,
+      "sha256": "d4dc6f9a145ea9e759add08442f9340d723618ba267e872d2824c0c5c212a4ef"
+    },
+    "sources/LightX2V/configs/caching/teacache/wan_t2v_1_3b_tea_480p.json": {
+      "source": "research/LightX2V/configs/caching/teacache/wan_t2v_1_3b_tea_480p.json",
+      "bytes": 605,
+      "sha256": "8a408348010c69706104b7c1daf7400821bfb99638f662689c30e12054fdc467"
+    },
+    "sources/LightX2V/configs/caching/magcache/wan_t2v_mag_1_3b.json": {
+      "source": "research/LightX2V/configs/caching/magcache/wan_t2v_mag_1_3b.json",
+      "bytes": 1538,
+      "sha256": "9427a7a6ff234d2a347a00a573cfd9e1aeb8806eb3fab87fbcec0824b3c59505"
+    },
+    "sources/LightX2V/README.md": {
+      "source": "research/LightX2V/README.md",
+      "bytes": 35305,
+      "sha256": "0c6bcb9be9874ca4618222d38aecb9d7bca17033d50f4ff9ca2b63e9918f560b"
+    },
+    "sources/LightX2V/LICENSE": {
+      "source": "research/LightX2V/LICENSE",
+      "bytes": 11357,
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    "sources/Self-Forcing/pipeline/causal_inference.py": {
+      "source": "research/Self-Forcing/pipeline/causal_inference.py",
+      "bytes": 14554,
+      "sha256": "a06f5653f266dce154116f85d33cee3f2923e8531fbb15b4702b3751abdaab69"
+    },
+    "sources/Self-Forcing/pipeline/self_forcing_training.py": {
+      "source": "research/Self-Forcing/pipeline/self_forcing_training.py",
+      "bytes": 12841,
+      "sha256": "0fbef7cae39a13338ae555acc2f114dc28a0e15f4dfcf4303640192e42ab7e96"
+    },
+    "sources/Self-Forcing/pipeline/causal_diffusion_inference.py": {
+      "source": "research/Self-Forcing/pipeline/causal_diffusion_inference.py",
+      "bytes": 16465,
+      "sha256": "3d0f2c509bfb39409b3b2d2322cf7b879502226c7e8af375f064082486f5d4f3"
+    },
+    "sources/Self-Forcing/wan/modules/causal_model.py": {
+      "source": "research/Self-Forcing/wan/modules/causal_model.py",
+      "bytes": 42167,
+      "sha256": "ae2644311ad212977260549e4b6034618647b82e2ee47a244bdaac50d8ff0778"
+    },
+    "sources/Self-Forcing/wan/modules/attention.py": {
+      "source": "research/Self-Forcing/wan/modules/attention.py",
+      "bytes": 5641,
+      "sha256": "02ad719a76e6bdec79d18fc62b094ef2ad7c28b2d593c9f395ae1226041b7c9d"
+    },
+    "sources/Self-Forcing/utils/scheduler.py": {
+      "source": "research/Self-Forcing/utils/scheduler.py",
+      "bytes": 7979,
+      "sha256": "4194ef1324bb06527621749c7f9a82f431ccf011823aa65099cb7bdf116b642e"
+    },
+    "sources/Self-Forcing/configs/self_forcing_dmd.yaml": {
+      "source": "research/Self-Forcing/configs/self_forcing_dmd.yaml",
+      "bytes": 1513,
+      "sha256": "f248ae59463c1b557868e88384be69e5d6d6c41a740726424dfa24f0f02db4d4"
+    },
+    "sources/Self-Forcing/README.md": {
+      "source": "research/Self-Forcing/README.md",
+      "bytes": 5138,
+      "sha256": "68e3596953c9f9dc2f42863a123fd5325f6007c62d8a7fd92e00cf7b215ef19d"
+    },
+    "sources/Self-Forcing/LICENSE": {
+      "source": "research/Self-Forcing/LICENSE",
+      "bytes": 11357,
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    "sources/SparkDiffusion/examples/custom_sparse_attn/my_attention.py": {
+      "source": "research/SparkDiffusion/examples/custom_sparse_attn/my_attention.py",
+      "bytes": 3698,
+      "sha256": "c8bbbd59ba860010ac03b1dab0f14a0954e951f7a400ac17ce561229f95377b5"
+    },
+    "sources/SparkDiffusion/README.md": {
+      "source": "research/SparkDiffusion/README.md",
+      "bytes": 21666,
+      "sha256": "070bd56f95da4483d49a9caa33afc1b068f5e4415c9ba7728137c26f2ba0ece3"
+    },
+    "sources/SparkDiffusion/LICENSE.txt": {
+      "source": "research/SparkDiffusion/LICENSE.txt",
+      "bytes": 11356,
+      "sha256": "7382b1cf711e7a7c7af9816e0e07b49b91e7149b7c6d347225f98800fcb1f1c2"
+    },
+    "sources/sparkdiffusion/LICENSE.txt": {
+      "source": "research/SparkDiffusion/LICENSE.txt",
+      "bytes": 11356,
+      "sha256": "7382b1cf711e7a7c7af9816e0e07b49b91e7149b7c6d347225f98800fcb1f1c2"
+    },
+    "sources/sparkdiffusion/networks/wan_rola_attention.py": {
+      "source": "research/sparkdiffusion/networks/wan_rola_attention.py",
+      "bytes": 26391,
+      "sha256": "5df5ef3ac547aa24b6066b71f7b0e4e6d7ecd29149b08c69a33042f444bc7067"
+    },
+    "sources/sparkdiffusion/networks/sparse_attn_registry.py": {
+      "source": "research/sparkdiffusion/networks/sparse_attn_registry.py",
+      "bytes": 3165,
+      "sha256": "c31872874f41f5fe2358aeb4e5fc8af684ee102877ebfc8485c4d8fbf89783ec"
+    },
+    "sources/sparkdiffusion/networks/wan2pt1.py": {
+      "source": "research/sparkdiffusion/networks/wan2pt1.py",
+      "bytes": 37296,
+      "sha256": "6d57a0b736d27d5901acbcce39e6bc51e2cdd5688ba0223abf9113a41d54331b"
+    },
+    "sources/sparkdiffusion/models/t2v_model_distill.py": {
+      "source": "research/sparkdiffusion/models/t2v_model_distill.py",
+      "bytes": 101993,
+      "sha256": "64e6733614d53d2a031e3ae5866463031f658645c612c9f72c7e16c45b1e560f"
+    },
+    "sources/sparkdiffusion/models/t2v_model_finetune.py": {
+      "source": "research/sparkdiffusion/models/t2v_model_finetune.py",
+      "bytes": 50737,
+      "sha256": "a01f74d9e9f5d0f4e0e784bbfb72fc75658c7f37ba972c395fccb6d396d9538e"
+    },
+    "sources/sparkdiffusion/samplers/euler.py": {
+      "source": "research/sparkdiffusion/samplers/euler.py",
+      "bytes": 1099,
+      "sha256": "9b1b1ed947cdb49eeca7e7c9fdffe2e5e780bb1ba92b27d9e193aa269b939176"
+    },
+    "sources/sparkdiffusion/ops/fused_kernel/fused_lowrank.py": {
+      "source": "research/sparkdiffusion/ops/fused_kernel/fused_lowrank.py",
+      "bytes": 13923,
+      "sha256": "b987bb1c720e7a6298e1088d830e95d9c3786737a629fa315f48ceec22a349e3"
+    },
+    "sources/sparkdiffusion/ops/fused_kernel/fused_sparse_attn.py": {
+      "source": "research/sparkdiffusion/ops/fused_kernel/fused_sparse_attn.py",
+      "bytes": 8794,
+      "sha256": "de7c0e2f492d3240c10814f154b768449af610f5d836a73e4bf310e4664261af"
+    },
+    "sources/sparkdiffusion/configs/defaults/model.py": {
+      "source": "research/sparkdiffusion/configs/defaults/model.py",
+      "bytes": 1576,
+      "sha256": "0b60b9a9464eee807eb3165dcd0599ab49852c4b3fb61563248a5e3023a1534a"
+    },
+    "sources/sparkdiffusion/configs/defaults/net.py": {
+      "source": "research/sparkdiffusion/configs/defaults/net.py",
+      "bytes": 10191,
+      "sha256": "e1520adca76d11e6af0cc4c52e9c14db31b645e4a02318a50d351eba392c6f04"
+    },
+    "sources/TurboDiffusion/turbodiffusion/inference/modify_model.py": {
+      "source": "research/TurboDiffusion/turbodiffusion/inference/modify_model.py",
+      "bytes": 6930,
+      "sha256": "1b154a28535f86583192b00a66eb161d78596d5bc7f124536d86a288663bdf36"
+    },
+    "sources/TurboDiffusion/turbodiffusion/rcm/models/t2v_model_distill_rcm.py": {
+      "source": "research/TurboDiffusion/turbodiffusion/rcm/models/t2v_model_distill_rcm.py",
+      "bytes": 53635,
+      "sha256": "25c9f96512c0dc572f333225632307f0072671c5824007f4612d7ef99815154b"
+    },
+    "sources/TurboDiffusion/turbodiffusion/rcm/samplers/euler.py": {
+      "source": "research/TurboDiffusion/turbodiffusion/rcm/samplers/euler.py",
+      "bytes": 1099,
+      "sha256": "9b1b1ed947cdb49eeca7e7c9fdffe2e5e780bb1ba92b27d9e193aa269b939176"
+    },
+    "sources/TurboDiffusion/turbodiffusion/rcm/networks/wan2pt1.py": {
+      "source": "research/TurboDiffusion/turbodiffusion/rcm/networks/wan2pt1.py",
+      "bytes": 29570,
+      "sha256": "37cee29dd06d7f16349b2f1f14b96abf836b25741730a4e5152f3d4440495404"
+    },
+    "sources/TurboDiffusion/turbodiffusion/ops/core.py": {
+      "source": "research/TurboDiffusion/turbodiffusion/ops/core.py",
+      "bytes": 14380,
+      "sha256": "b9b03fb6bacf4ac21fe1be5db06ba7dc9244b20db91b6046271c7af3fd0dbfe0"
+    },
+    "sources/TurboDiffusion/turbodiffusion/ops/quant/quant.cu": {
+      "source": "research/TurboDiffusion/turbodiffusion/ops/quant/quant.cu",
+      "bytes": 2314,
+      "sha256": "f5ae2096b66be97174eb06fc1559817b9b0a041e858a6b55aeb8f65517c7a4be"
+    },
+    "sources/TurboDiffusion/.gitmodules": {
+      "source": "research/TurboDiffusion/.gitmodules",
+      "bytes": 117,
+      "sha256": "f1586f866e2ffd8336676399aef0a2e28d6ec9fee515bc0b76d42982769f9679"
+    },
+    "sources/TurboDiffusion/README.md": {
+      "source": "research/TurboDiffusion/README.md",
+      "bytes": 32039,
+      "sha256": "1b4e3c009a9cd154c555dd1880882436de21732438e27e5e6ddc7cf2746b679a"
+    },
+    "sources/TurboDiffusion/LICENSE": {
+      "source": "research/TurboDiffusion/LICENSE",
+      "bytes": 11391,
+      "sha256": "1efab44a05c6007eea81163b36ad4441c1e00f50bc60d295530e279a27eb431e"
+    },
+    "sources/UnStep/unstep/wrapper.py": {
+      "source": "research/UnStep/unstep/wrapper.py",
+      "bytes": 25086,
+      "sha256": "11f5183f79cafd8675501ddd52e0bdd790c9ee6c31924bbbc981017c1289b54b"
+    },
+    "sources/UnStep/unstep/wrapper_runtime.py": {
+      "source": "research/UnStep/unstep/wrapper_runtime.py",
+      "bytes": 78554,
+      "sha256": "19d4663fc287f995df57649f90a0d466d2f9a805ea50d850265e6e370ed1f820"
+    },
+    "sources/UnStep/unstep/clean_sigma.py": {
+      "source": "research/UnStep/unstep/clean_sigma.py",
+      "bytes": 5124,
+      "sha256": "6f04e4ba93e3aa6dc0de0dc88f734a3bc035e17eac02b383bdcb97ec32ebc7d0"
+    },
+    "sources/UnStep/THIRD_PARTY_NOTICES.md": {
+      "source": "research/UnStep/THIRD_PARTY_NOTICES.md",
+      "bytes": 2064,
+      "sha256": "0a287be6aac242edd203a2e6a5d6bed86657cc8337cd1a3e418583ae89084770"
+    },
+    "sources/UnStep/README.md": {
+      "source": "research/UnStep/README.md",
+      "bytes": 4125,
+      "sha256": "d1803c45b6b3963840d1c754cc91c8d6e67551ab4e3ee312daae605f27484bf5"
+    },
+    "sources/UnStep/LICENSE": {
+      "source": "research/UnStep/LICENSE",
+      "bytes": 19332,
+      "sha256": "82656a050544ab820c9aa7b61433f5181f8e80cacd042377140962a3e3eb5721"
+    },
+    "sources/AURA-deployed/aura/configs.py": {
+      "source": "frozen deployment source.tar.gz:experiments/rtx1-5b-optimized-001/aura/configs.py",
+      "bytes": 3147,
+      "sha256": "0c285233e0a1a6f3f47993cc7a4337cc6d7e4752758a314271f6ebc53eea7eb1"
+    },
+    "sources/AURA-deployed/aura/model.py": {
+      "source": "frozen deployment source.tar.gz:experiments/rtx1-5b-optimized-001/aura/model.py",
+      "bytes": 18253,
+      "sha256": "3ad568fa89237e7dbb93f578c21ef183e41e79e2de58f46c8ed8b349941e67b9"
+    },
+    "sources/AURA-deployed/aura/pipeline.py": {
+      "source": "frozen deployment source.tar.gz:experiments/rtx1-5b-optimized-001/aura/pipeline.py",
+      "bytes": 11098,
+      "sha256": "8431a6d742e6004a11b1a5594eb8389e1c7501569c94772b350b1442bc570b8f"
+    },
+    "sources/AURA-deployed/aura/kv_cache.py": {
+      "source": "frozen deployment source.tar.gz:experiments/rtx1-5b-optimized-001/aura/kv_cache.py",
+      "bytes": 3407,
+      "sha256": "e4e34a109326b0fbf0f0d5850213ad0efcd9c15247c1f94d4c4538c3ae2498c4"
+    },
+    "sources/AURA-deployed/aura/audio.py": {
+      "source": "frozen deployment source.tar.gz:experiments/rtx1-5b-optimized-001/aura/audio.py",
+      "bytes": 2825,
+      "sha256": "00b99ca9d630875ec83c10cccbc2577a5bcfcb1971fbae1d1412a4ae3fcc3f23"
+    },
+    "sources/AURA-deployed/aura/streaming_audio.py": {
+      "source": "frozen deployment source.tar.gz:experiments/rtx1-5b-optimized-001/aura/streaming_audio.py",
+      "bytes": 3753,
+      "sha256": "e2e2dd4a4f4675f20910546c084268e0f981ca55e7d4b21a3ae51c6cdd9bad81"
+    },
+    "sources/AURA-deployed/serve_optimized.py": {
+      "source": "frozen deployment source.tar.gz:experiments/rtx1-5b-optimized-001/serve_optimized.py",
+      "bytes": 4177,
+      "sha256": "5a6028b15cfa878abe6e85f07b501c22325bbdc9988383c1fe5cddb9140f8ab1"
+    },
+    "sources/AURA-deployed/rope_variants.py": {
+      "source": "frozen deployment source.tar.gz:experiments/rtx1-5b-optimized-001/rope_variants.py",
+      "bytes": 1132,
+      "sha256": "38cad77666446495d0f152876b58753988aef0e61642e5a49be22013e3f5afef"
+    },
+    "sources/AURA-deployed/taehv_decoder.py": {
+      "source": "frozen deployment source.tar.gz:experiments/rtx1-5b-optimized-001/taehv_decoder.py",
+      "bytes": 1999,
+      "sha256": "c3817869470f5d779e0b66cf80115443deedb3ee584db494fb828188063af802"
+    },
+    "sources/AURA-deployed/check_correctness.py": {
+      "source": "frozen deployment source.tar.gz:experiments/rtx1-5b-optimized-001/check_correctness.py",
+      "bytes": 3104,
+      "sha256": "b0c36422eb291e5a9279f5d492a060af5488573b2655785abf635499550817d3"
+    },
+    "sources/AURA-deployed/research_kernels/taehv-011dfc2/taehv.py": {
+      "source": "frozen deployment source.tar.gz:research_kernels/taehv-011dfc2/taehv.py",
+      "bytes": 26475,
+      "sha256": "99545f093b36c16297ad182ce18a5dce2ebc98bb611f5e8dfa2dce431ba39ce2"
+    },
+    "sources/AURA-deployed/research_kernels/taehv-011dfc2/LICENSE": {
+      "source": "frozen deployment source.tar.gz:research_kernels/taehv-011dfc2/LICENSE",
+      "bytes": 1073,
+      "sha256": "532f9e394518ffddecd294a517d5b41d79d3d3866c3fb95a6cb0e8bcc02370bf"
+    },
+    "sources/AURA-deployed/README.md": {
+      "source": "research/aura/README.md",
+      "bytes": 7441,
+      "sha256": "9751c0e93a9787cadaebcfdf9a4458ef02f0293833e77532547f277064518280"
+    },
+    "sources/AURA-deployed/LICENSE.txt": {
+      "source": "research/aura/LICENSE.txt",
+      "bytes": 1928,
+      "sha256": "9a99812253bed3dc3d0efe61db4a87235c8bcd96b67ab91ef9927d13c55a307e"
+    },
+    "project/rtx-aura-plan.md": {
+      "source": "docs/rtx-aura-plan.md",
+      "bytes": 21795,
+      "sha256": "5a1a30bddeb767b2697ab320976aef51118fe218ddd6534250b0ad60d7df730f"
+    },
+    "project/rtx-aura-results.md": {
+      "source": "docs/rtx-aura-results.md",
+      "bytes": 31704,
+      "sha256": "9f83f1a251fdcac8d5535f29e9ece5015e6d9783a8900c685f280391164afebc"
+    },
+    "project/literature-aura-acceleration.md": {
+      "source": "docs/literature-aura-acceleration.md",
+      "bytes": 29351,
+      "sha256": "5528e2a2bb887da97ab7741d18cde97f66fad5a0549aef094a200e2ad87564f6"
+    },
+    "evidence/rtx1-5b-public-web-20261124-01/results.json": {
+      "source": "runs/rtx1-5b-public-web-20261124-01/results.json",
+      "bytes": 2757,
+      "sha256": "07b49422192fd52e58d0f7a1f30fcfdc2b4299145366bea9723fb24dfa3daae8"
+    },
+    "evidence/rtx1-5b-quality-20261124-01/quality-summary.json": {
+      "source": "runs/rtx1-5b-quality-20261124-01/quality-summary.json",
+      "bytes": 1146,
+      "sha256": "41c751252af3561bb457bc7a0133339815ac646e59f760899dfa528e7cd0447f"
+    }
+  }
+}

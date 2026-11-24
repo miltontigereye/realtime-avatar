@@ -1,0 +1,97 @@
+[
+  {
+    "model": "aura-5b",
+    "session_id": "89b60ec47e4f4478a79662d32280d087",
+    "resolution": [
+      1280,
+      704
+    ],
+    "playback_fps": 25,
+    "compile": "max-autotune-no-cudagraphs",
+    "compile_dynamic": false,
+    "runtime": {
+      "model": "aura-5b",
+      "resolution": [
+        1280,
+        704
+      ],
+      "playback_fps": 25,
+      "steps": [
+        1000,
+        745,
+        498,
+        255
+      ],
+      "attention": "SDPA",
+      "profile": "max-autotune-no-cudagraphs",
+      "compile_dynamic": false,
+      "prepared_conditioning": true,
+      "gpu_pixel_packing": true,
+      "transformer": "BF16 except time/audio FP32",
+      "text_encoder_device": "CPU",
+      "decoder": "lighttaew2_2_v2.safetensors",
+      "decoder_dtype": "FP16",
+      "raw_latents": true,
+      "cold_start_requires_compilation": true,
+      "quality_note": "Lightweight decoder changes pixels; 5B quality validation is recorded separately.",
+      "warmup_seconds": 82.9198259639088,
+      "warmup_chunks": 6
+    },
+    "denoising_steps": [
+      1000,
+      745,
+      498,
+      255
+    ],
+    "transformer_storage": "BF16 except time and audio modules FP32",
+    "autocast": "BF16",
+    "vae_dtype": "FP32",
+    "text_encoder_device": "CPU",
+    "transformer_offload_for_decode": false,
+    "vae_decode_group": 2,
+    "frames_per_chunk": 16,
+    "nominal_chunk_duration_s": 0.64,
+    "warmup_chunks": 2,
+    "warmup_chunk_seconds": [
+      0.7,
+      0.76
+    ],
+    "measured_chunks": 20,
+    "measured_frames": 320,
+    "measured_render_seconds": 17.0,
+    "generation_fps": 18.823529411764707,
+    "real_time_factor": 1.328125,
+    "chunk_latency_seconds": {
+      "mean": 0.85,
+      "p50": 0.85,
+      "p95": 0.85,
+      "p99": 0.85
+    },
+    "request_to_ready_seconds": 5.405517218983732,
+    "ready_to_done_wall_seconds": 18.96261379099451,
+    "all_chunks_wall_fps": 18.562841804391308,
+    "peak_sampled_gpu_memory_mib": 20485,
+    "streamed_bytes": 5919289,
+    "input": "Repeated demo/speech.wav, no dropped samples, fixed demo/portrait.jpg",
+    "timing_boundary": "Server chunk timing: audio features, diffusion, synchronized VAE decode, CPU transfer and pixel conversion, encoder queue submission. Excludes model/portrait setup, audio wait, final encoder drain and browser/network playback. Timings reported by server rounded to 0.01 s.",
+    "ffprobe": {
+      "programs": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "width": 1280,
+          "height": 704,
+          "r_frame_rate": "25/1"
+        },
+        {
+          "codec_name": "aac",
+          "r_frame_rate": "0/0"
+        }
+      ],
+      "format": {
+        "duration": "14.122734",
+        "size": "5919289"
+      }
+    }
+  }
+]

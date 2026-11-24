@@ -1,0 +1,39 @@
+{
+  "lighttae_v2": {
+    "automated_gate_passed": true,
+    "cases": {
+      "existing": {
+        "mouth_psnr_db": 36.74803403146522,
+        "raw_psnr_db": 40.36497758494025,
+        "sync_conf_delta": -0.019575119018554688,
+        "identity_delta": -0.0035050148144364357,
+        "passed": true,
+        "failed_checks": []
+      },
+      "fashion": {
+        "mouth_psnr_db": 39.62711377643594,
+        "raw_psnr_db": 43.47766288628755,
+        "sync_conf_delta": -0.04218006134033203,
+        "identity_delta": -0.0011911485344171524,
+        "passed": true,
+        "failed_checks": []
+      },
+      "grandmother": {
+        "mouth_psnr_db": 38.21472812741729,
+        "raw_psnr_db": 41.93147448252168,
+        "sync_conf_delta": 0.011479377746582031,
+        "identity_delta": -0.001005200669169426,
+        "passed": true,
+        "failed_checks": []
+      },
+      "producer": {
+        "mouth_psnr_db": 38.06786928002597,
+        "raw_psnr_db": 41.68955540420143,
+        "sync_conf_delta": -0.05843162536621094,
+        "identity_delta": 0.0006716325879096985,
+        "passed": true,
+        "failed_checks": []
+      }
+    }
+  }
+}

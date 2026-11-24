@@ -1,0 +1,121 @@
+AURA ALGORITHM RESEARCH CONTEXT — 2026-11-24
+
+Start with project/rtx-aura-plan.md, project/rtx-aura-results.md and project/literature-aura-acceleration.md.
+Then read the method-specific files below. These are selected source snapshots for understanding algorithms, not self-contained runnable projects. External imports and runtime prerequisites remain upstream.
+Use synthetic CPU prototypes for initial ideas; measure actual speed and paired quality on the designated GPU machines. Preserve causality, bounded state, four-step baseline and declared quality gates.
+No weights, media, datasets, environments, UI, logs, binaries or full training infrastructure are included.
+README performance claims belong to their authors and settings; our verified measurements are in the project results ledger.
+
+## FastVideo
+Sparse/linear attention, causal KV state, attention quantization training
+Revision: c938a8aa2b856a594f791a61875ba0bdac5ef318
+Upstream: https://github.com/hao-ai-lab/FastVideo.git
+  sources/FastVideo/fastvideo/attention/backends/video_sparse_attn.py
+  sources/FastVideo/fastvideo/attention/backends/sla.py
+  sources/FastVideo/fastvideo/attention/backends/attn_qat_train.py
+  sources/FastVideo/fastvideo/attention/backends/attn_qat_infer.py
+  sources/FastVideo/fastvideo/attention/backends/abstract.py
+  sources/FastVideo/fastvideo/models/wan/causal_transformer.py
+  sources/FastVideo/fastvideo/pipelines/basic/wan/stages/causal_denoising.py
+  sources/FastVideo/fastvideo-kernel/python/fastvideo_kernel/triton_kernels/sla_triton.py
+  sources/FastVideo/docs/training/attn_qat.md
+  sources/FastVideo/README.md
+  sources/FastVideo/LICENSE
+
+## LightX2V
+TeaCache/MagCache feature reuse, rolling KV cache, lightweight decoder
+Revision: e574493231fc019abe70f6e7727902ea45e59474
+Upstream: https://github.com/ModelTC/LightX2V.git
+  sources/LightX2V/lightx2v/models/networks/wan/infer/feature_caching/transformer_infer.py
+  sources/LightX2V/lightx2v/models/schedulers/wan/feature_caching/scheduler.py
+  sources/LightX2V/lightx2v/common/transformer_infer/transformer_infer.py
+  sources/LightX2V/lightx2v/common/kvcache/base.py
+  sources/LightX2V/lightx2v/common/kvcache/rolling.py
+  sources/LightX2V/lightx2v/common/kvcache/layout.py
+  sources/LightX2V/lightx2v/models/video_encoders/hf/tae.py
+  sources/LightX2V/configs/caching/teacache/wan_t2v_1_3b_tea_480p.json
+  sources/LightX2V/configs/caching/magcache/wan_t2v_mag_1_3b.json
+  sources/LightX2V/README.md
+  sources/LightX2V/LICENSE
+
+## Self-Forcing
+Causal chunk generation, cache use and self-forcing training algorithm
+Revision: 33593df3e81fa3ec10239271dd2c100facac6de1
+Upstream: https://github.com/guandeh17/Self-Forcing.git
+  sources/Self-Forcing/pipeline/causal_inference.py
+  sources/Self-Forcing/pipeline/self_forcing_training.py
+  sources/Self-Forcing/pipeline/causal_diffusion_inference.py
+  sources/Self-Forcing/wan/modules/causal_model.py
+  sources/Self-Forcing/wan/modules/attention.py
+  sources/Self-Forcing/utils/scheduler.py
+  sources/Self-Forcing/configs/self_forcing_dmd.yaml
+  sources/Self-Forcing/README.md
+  sources/Self-Forcing/LICENSE
+
+## SparkDiffusion
+Framework overview; algorithm implementation is in the adjacent sparkdiffusion directory
+Revision: 3fd210c7baaf6ad233ce4c730d0e329bb8014b6b
+Upstream: https://github.com/AlibabaResearch/SparkDiffusion.git
+  sources/SparkDiffusion/examples/custom_sparse_attn/my_attention.py
+  sources/SparkDiffusion/README.md
+  sources/SparkDiffusion/LICENSE.txt
+
+## sparkdiffusion
+RoLa sparse/low-rank attention, CrossDistill objective and fused operators
+Revision: no independent Git checkout
+Adjacent source package tracked logically under SparkDiffusion/sparkdiffusion; per-file hashes identify the physical working copy.
+  sources/sparkdiffusion/LICENSE.txt
+  sources/sparkdiffusion/networks/wan_rola_attention.py
+  sources/sparkdiffusion/networks/sparse_attn_registry.py
+  sources/sparkdiffusion/networks/wan2pt1.py
+  sources/sparkdiffusion/models/t2v_model_distill.py
+  sources/sparkdiffusion/models/t2v_model_finetune.py
+  sources/sparkdiffusion/samplers/euler.py
+  sources/sparkdiffusion/ops/fused_kernel/fused_lowrank.py
+  sources/sparkdiffusion/ops/fused_kernel/fused_sparse_attn.py
+  sources/sparkdiffusion/configs/defaults/model.py
+  sources/sparkdiffusion/configs/defaults/net.py
+
+## TurboDiffusion
+Sparse-linear attention replacement, rCM distillation and low-bit operators
+Revision: 0c189a2c1dd57d1d5fa8ef74d2e5caee5ed85f05
+Upstream: https://github.com/thu-ml/TurboDiffusion.git
+  sources/TurboDiffusion/turbodiffusion/inference/modify_model.py
+  sources/TurboDiffusion/turbodiffusion/rcm/models/t2v_model_distill_rcm.py
+  sources/TurboDiffusion/turbodiffusion/rcm/samplers/euler.py
+  sources/TurboDiffusion/turbodiffusion/rcm/networks/wan2pt1.py
+  sources/TurboDiffusion/turbodiffusion/ops/core.py
+  sources/TurboDiffusion/turbodiffusion/ops/quant/quant.cu
+  sources/TurboDiffusion/.gitmodules
+  sources/TurboDiffusion/README.md
+  sources/TurboDiffusion/LICENSE
+
+## UnStep
+Reduced denoising schedules, attention projection SVD and local/sink attention
+Revision: 69ac6ddb90f6e9e6f3a83d2b1f570492ad122a75
+Upstream: https://github.com/facebookresearch/UnStep.git
+  sources/UnStep/unstep/wrapper.py
+  sources/UnStep/unstep/wrapper_runtime.py
+  sources/UnStep/unstep/clean_sigma.py
+  sources/UnStep/THIRD_PARTY_NOTICES.md
+  sources/UnStep/README.md
+  sources/UnStep/LICENSE
+
+## AURA-deployed
+Measured baseline: actual compiled AURA pipeline, invariant conditioning, causal audio/KV cache and streaming LightTAE adapter.
+Revision: c06aa7dc8b850405273345089da521454ffd607e
+Modified runtime snapshot, not a pristine upstream revision; hashes and the frozen source archive identify executed content.
+  sources/AURA-deployed/aura/configs.py
+  sources/AURA-deployed/aura/model.py
+  sources/AURA-deployed/aura/pipeline.py
+  sources/AURA-deployed/aura/kv_cache.py
+  sources/AURA-deployed/aura/audio.py
+  sources/AURA-deployed/aura/streaming_audio.py
+  sources/AURA-deployed/serve_optimized.py
+  sources/AURA-deployed/rope_variants.py
+  sources/AURA-deployed/taehv_decoder.py
+  sources/AURA-deployed/check_correctness.py
+  sources/AURA-deployed/research_kernels/taehv-011dfc2/taehv.py
+  sources/AURA-deployed/research_kernels/taehv-011dfc2/LICENSE
+  sources/AURA-deployed/README.md
+  sources/AURA-deployed/LICENSE.txt
